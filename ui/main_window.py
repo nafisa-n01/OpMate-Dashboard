@@ -14,9 +14,8 @@ Layout design:
     Flat, minimalist framing — a single background color throughout,
     with generous margins providing breathing room instead of a boxed
     "panel within a panel" look. Tabs use an underline style (no filled
-    background) to keep navigation lightweight. The individual metric
-    cards (CPU/RAM/Disk/System) retain their own pixel-art borders —
-    this flattening only applies to the outer window chrome.
+    background) to keep navigation lightweight, styled in the same
+    pixel font used across all the metric cards.
 """
 
 import logging
@@ -38,6 +37,7 @@ from ui.widgets.memory_widget import MemoryWidget
 from ui.widgets.disk_widget import DiskWidget
 from ui.widgets.process_widget import ProcessWidget
 from ui.widgets.system_widget import SystemWidget
+from ui.styles.fonts import get_pixel_font_family
 
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
 
         self.worker: Optional[WorkerThread] = None
         self.update_timer = QTimer()
+        self._pixel_font = get_pixel_font_family()
 
         self._setup_ui()
         self._start_worker()
@@ -94,7 +95,7 @@ class MainWindow(QMainWindow):
         Structure:
             QMainWindow
               └─ central_widget (flat background, provides the outer margin)
-                   └─ QTabWidget (underline-style tabs, no filled panel)
+                   └─ QTabWidget (underline-style tabs, pixel font, no filled panel)
                         └─ dashboard_content (cards with generous gaps)
         """
         central_widget = QWidget()
@@ -160,8 +161,8 @@ class MainWindow(QMainWindow):
 
         central_layout.addWidget(self.tabs)
 
-        # Minimalist underline-style tabs — no filled background box,
-        # just a colored underline on the active tab
+        # Minimalist underline-style tabs, using the pixel font so the
+        # navigation matches the same visual language as the metric cards
         self.tabs.setStyleSheet(
             f"""
             QTabWidget::pane {{
@@ -171,7 +172,9 @@ class MainWindow(QMainWindow):
             QTabBar::tab {{
                 background-color: transparent;
                 color: #888899;
-                padding: 10px 18px;
+                font-family: '{self._pixel_font}';
+                font-size: 9pt;
+                padding: 12px 18px;
                 margin-right: 8px;
                 border: none;
                 border-bottom: 2px solid transparent;

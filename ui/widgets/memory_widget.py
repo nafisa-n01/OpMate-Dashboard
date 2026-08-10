@@ -12,6 +12,7 @@ Features:
     - Footer row: Used | Available (matches reference image)
     - Swap row only appears if swap is actually configured
     - Color-coded by load (green/yellow/red)
+    - 4 pixel-art screw icons pinned to the card's corners
 
 Design (matches RAM usage reference image):
     ┌─────────────────────────────────────┐
@@ -27,6 +28,7 @@ Design (matches RAM usage reference image):
 """
 
 import logging
+import os
 
 from PyQt6.QtWidgets import (
     QVBoxLayout,
@@ -36,7 +38,7 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 
 from core.data_models import MemoryMetrics
 from ui.widgets.base_widget import BaseWidget
@@ -52,6 +54,53 @@ CARD_BORDER_COLOR = "#6a6a9a"
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 CARD_INNER_BACKGROUND = "#2a2a44"
 ACCENT_COLOR = "#88ff88"  # Green, RAM's accent color
+
+# Corner screw decoration
+SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
+SCREW_MARGIN = 4  # px from each edge of the card
+
+
+class _CardFrame(QFrame):
+    """
+    QFrame subclass that keeps 4 corner "screw" icons pinned to its
+    corners, repositioning them whenever the frame is resized.
+    """
+
+    def __init__(self, screw_pixmap: QPixmap, margin: int = SCREW_MARGIN, parent=None) -> None:
+        super().__init__(parent)
+        self._margin = margin
+        self._screw_labels = []
+
+        if screw_pixmap is not None and not screw_pixmap.isNull():
+            for _ in range(4):
+                screw_label = QLabel(self)
+                screw_label.setPixmap(screw_pixmap)
+                screw_label.setFixedSize(screw_pixmap.width(), screw_pixmap.height())
+                screw_label.setStyleSheet("background: transparent; border: none;")
+                screw_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                screw_label.raise_()
+                self._screw_labels.append(screw_label)
+        else:
+            logger.warning("Screw icon not loaded from '%s'; skipping corner screws", SCREW_ICON_PATH)
+
+        self._position_screws()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_screws()
+
+    def _position_screws(self) -> None:
+        if len(self._screw_labels) != 4:
+            return
+
+        w, h = self.width(), self.height()
+        sw, sh = self._screw_labels[0].width(), self._screw_labels[0].height()
+        m = self._margin
+
+        self._screw_labels[0].move(m, m)                    # top-left
+        self._screw_labels[1].move(w - sw - m, m)            # top-right
+        self._screw_labels[2].move(m, h - sh - m)             # bottom-left
+        self._screw_labels[3].move(w - sw - m, h - sh - m)    # bottom-right
 
 
 class MemoryWidget(BaseWidget):
@@ -82,7 +131,8 @@ class MemoryWidget(BaseWidget):
         self.setLayout(outer_layout)
 
         # --- CARD CONTAINER ---
-        card = QFrame()
+        screw_pixmap = QPixmap(SCREW_ICON_PATH)
+        card = _CardFrame(screw_pixmap)
         card.setStyleSheet(
             f"""
             QFrame {{
