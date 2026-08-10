@@ -7,12 +7,15 @@ Responsibilities:
     - Configure application-wide logging
     - Create the Qt Application instance
     - Load the main window
-    - Start the Qt event loop 
+    - Start the Qt event loop
 """
 
 import sys
 import logging
 
+# Pylint cannot properly inspect some PyQt6 modules
+# even though the imports work correctly.
+# pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 

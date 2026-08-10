@@ -13,8 +13,9 @@ Responsibilities:
 Layout design:
     The window uses a "framed" look: the QMainWindow itself shows a dark
     outer background, and all real content sits inside a rounded panel
-    inset with margins — similar to a card floating on a background,
-    rather than content stretching edge-to-edge.
+    inset with generous margins — similar to a card floating on a
+    background, with clear breathing room around and between elements
+    (matching the spaced-out card style of the reference dashboard).
 """
 
 import logging
@@ -41,14 +42,23 @@ from ui.widgets.system_widget import SystemWidget
 
 logger = logging.getLogger(__name__)
 
-# Outer window background (the "empty" framing area, like the cyan reference)
+# Outer window background (the "empty" framing area)
 OUTER_BACKGROUND_COLOR = "#14141f"
 
 # Inner content panel background (where all widgets/tabs actually live)
 CONTENT_BACKGROUND_COLOR = "#2a2a3e"
 
 # Space between the window edge and the content panel
-OUTER_MARGIN = 24
+OUTER_MARGIN = 40
+
+# Space between the content panel edge and the tab bar / dashboard content
+CONTENT_MARGIN = 20
+
+# Vertical gap between stacked widget cards (CPU, RAM, Disk, System)
+CARD_SPACING = 24
+
+# Padding around the scrollable dashboard content itself
+DASHBOARD_MARGIN = 16
 
 
 class MainWindow(QMainWindow):
@@ -86,9 +96,10 @@ class MainWindow(QMainWindow):
 
         Structure:
             QMainWindow
-              └─ outer_widget (dark background, provides the margin/frame)
-                   └─ content_panel (rounded, lighter background)
+              └─ outer_widget (dark background, provides the outer margin)
+                   └─ content_panel (rounded, lighter background, inner margin)
                         └─ QTabWidget (Dashboard, Processes, Storage, Settings)
+                             └─ dashboard_content (cards with generous gaps)
         """
         # --- OUTER WIDGET (provides the framing margin) ---
         outer_widget = QWidget()
@@ -112,22 +123,27 @@ class MainWindow(QMainWindow):
         """
         )
         content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setContentsMargins(
+            CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN
+        )
         content_panel.setLayout(content_layout)
 
         outer_layout.addWidget(content_panel)
 
-        # --- TABS (now the only navigation — sidebar removed) ---
+        # --- TABS ---
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
 
         # --- DASHBOARD TAB (scrollable container for overview widgets) ---
         dashboard_content = QWidget()
         dashboard_layout = QVBoxLayout()
-        dashboard_layout.setSpacing(12)
+        dashboard_layout.setContentsMargins(
+            DASHBOARD_MARGIN, DASHBOARD_MARGIN, DASHBOARD_MARGIN, DASHBOARD_MARGIN
+        )
+        dashboard_layout.setSpacing(CARD_SPACING)
         dashboard_content.setLayout(dashboard_layout)
 
-        # Create overview widgets (process table now lives in its own tab)
+        # Create overview widgets (process table lives in its own tab)
         self.cpu_widget = CPUWidget()
         self.memory_widget = MemoryWidget()
         self.disk_widget = DiskWidget()
@@ -145,9 +161,12 @@ class MainWindow(QMainWindow):
             "QScrollArea { background-color: transparent; border: none; }"
         )
 
-        # --- PROCESSES TAB (dedicated home for the process table) ---
+        # --- PROCESSES TAB ---
         processes_content = QWidget()
         processes_layout = QVBoxLayout()
+        processes_layout.setContentsMargins(
+            DASHBOARD_MARGIN, DASHBOARD_MARGIN, DASHBOARD_MARGIN, DASHBOARD_MARGIN
+        )
         processes_content.setLayout(processes_layout)
 
         self.process_widget = ProcessWidget()
