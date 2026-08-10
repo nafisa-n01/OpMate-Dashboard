@@ -11,11 +11,12 @@ Responsibilities:
     - Handle cleanup when the app closes
 
 Layout design:
-    The window uses a "framed" look: the QMainWindow itself shows a dark
-    outer background, and all real content sits inside a rounded panel
-    inset with generous margins — similar to a card floating on a
-    background, with clear breathing room around and between elements
-    (matching the spaced-out card style of the reference dashboard).
+    Flat, minimalist framing — a single background color throughout,
+    with generous margins providing breathing room instead of a boxed
+    "panel within a panel" look. Tabs use an underline style (no filled
+    background) to keep navigation lightweight. The individual metric
+    cards (CPU/RAM/Disk/System) retain their own pixel-art borders —
+    this flattening only applies to the outer window chrome.
 """
 
 import logging
@@ -26,7 +27,6 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QTabWidget,
-    QFrame,
     QScrollArea,
 )
 from PyQt6.QtCore import QTimer
@@ -42,23 +42,20 @@ from ui.widgets.system_widget import SystemWidget
 
 logger = logging.getLogger(__name__)
 
-# Outer window background (the "empty" framing area)
-OUTER_BACKGROUND_COLOR = "#14141f"
+# Single background color for the entire window — no separate "panel" box
+BACKGROUND_COLOR = "#22222f"
 
-# Inner content panel background (where all widgets/tabs actually live)
-CONTENT_BACKGROUND_COLOR = "#2a2a3e"
+# Accent color used for the active tab's underline
+ACCENT_COLOR = "#8a8aff"
 
-# Space between the window edge and the content panel
+# Outer margin: space between the window edge and all content
 OUTER_MARGIN = 40
-
-# Space between the content panel edge and the tab bar / dashboard content
-CONTENT_MARGIN = 20
 
 # Vertical gap between stacked widget cards (CPU, RAM, Disk, System)
 CARD_SPACING = 24
 
 # Padding around the scrollable dashboard content itself
-DASHBOARD_MARGIN = 16
+DASHBOARD_MARGIN = 4
 
 
 class MainWindow(QMainWindow):
@@ -96,39 +93,19 @@ class MainWindow(QMainWindow):
 
         Structure:
             QMainWindow
-              └─ outer_widget (dark background, provides the outer margin)
-                   └─ content_panel (rounded, lighter background, inner margin)
-                        └─ QTabWidget (Dashboard, Processes, Storage, Settings)
-                             └─ dashboard_content (cards with generous gaps)
+              └─ central_widget (flat background, provides the outer margin)
+                   └─ QTabWidget (underline-style tabs, no filled panel)
+                        └─ dashboard_content (cards with generous gaps)
         """
-        # --- OUTER WIDGET (provides the framing margin) ---
-        outer_widget = QWidget()
-        self.setCentralWidget(outer_widget)
-        outer_widget.setStyleSheet(f"background-color: {OUTER_BACKGROUND_COLOR};")
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        central_widget.setStyleSheet(f"background-color: {BACKGROUND_COLOR};")
 
-        outer_layout = QVBoxLayout()
-        outer_layout.setContentsMargins(
+        central_layout = QVBoxLayout()
+        central_layout.setContentsMargins(
             OUTER_MARGIN, OUTER_MARGIN, OUTER_MARGIN, OUTER_MARGIN
         )
-        outer_widget.setLayout(outer_layout)
-
-        # --- CONTENT PANEL (rounded card holding all real UI) ---
-        content_panel = QFrame()
-        content_panel.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {CONTENT_BACKGROUND_COLOR};
-                border-radius: 16px;
-            }}
-        """
-        )
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(
-            CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN
-        )
-        content_panel.setLayout(content_layout)
-
-        outer_layout.addWidget(content_panel)
+        central_widget.setLayout(central_layout)
 
         # --- TABS ---
         self.tabs = QTabWidget()
@@ -176,32 +153,35 @@ class MainWindow(QMainWindow):
         self.tab_storage = PlaceholderWidget("Storage Analyzer")
         self.tab_settings = PlaceholderWidget("Settings")
 
-        self.tabs.addTab(dashboard_scroll, "📊 Dashboard")
-        self.tabs.addTab(processes_content, "⚙️ Processes")
-        self.tabs.addTab(self.tab_storage, "📁 Storage")
-        self.tabs.addTab(self.tab_settings, "⚙️ Settings")
+        self.tabs.addTab(dashboard_scroll, "Dashboard")
+        self.tabs.addTab(processes_content, "Processes")
+        self.tabs.addTab(self.tab_storage, "Storage")
+        self.tabs.addTab(self.tab_settings, "Settings")
 
-        content_layout.addWidget(self.tabs)
+        central_layout.addWidget(self.tabs)
 
-        # Tab bar styling
+        # Minimalist underline-style tabs — no filled background box,
+        # just a colored underline on the active tab
         self.tabs.setStyleSheet(
             f"""
             QTabWidget::pane {{
-                background-color: {CONTENT_BACKGROUND_COLOR};
+                background-color: transparent;
                 border: none;
-                border-radius: 16px;
             }}
             QTabBar::tab {{
-                background-color: #3d3d52;
-                color: #c0c0d0;
-                padding: 10px 20px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
+                background-color: transparent;
+                color: #888899;
+                padding: 10px 18px;
+                margin-right: 8px;
+                border: none;
+                border-bottom: 2px solid transparent;
             }}
             QTabBar::tab:selected {{
-                background-color: #5d5d72;
                 color: #ffffff;
+                border-bottom: 2px solid {ACCENT_COLOR};
+            }}
+            QTabBar::tab:hover {{
+                color: #cccccc;
             }}
         """
         )
