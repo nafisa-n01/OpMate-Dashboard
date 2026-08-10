@@ -9,6 +9,12 @@ Responsibilities:
     - Instantiate the background worker thread
     - Connect worker signals to widget slots (glue layer between core and UI)
     - Handle cleanup when the app closes
+
+Layout design:
+    The window uses a "framed" look: the QMainWindow itself shows a dark
+    outer background, and all real content sits inside a rounded panel
+    inset with margins — similar to a card floating on a background,
+    rather than content stretching edge-to-edge.
 """
 
 import logging
@@ -18,21 +24,31 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QTabWidget,
-    QPushButton,
-    QLabel,
-    QStackedWidget,
+    QFrame,
+    QScrollArea,
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QTimer
 
 from core.worker_thread import WorkerThread
 from ui.widgets.placeholder_widget import PlaceholderWidget
 from ui.widgets.cpu_widget import CPUWidget
+from ui.widgets.memory_widget import MemoryWidget
+from ui.widgets.disk_widget import DiskWidget
+from ui.widgets.process_widget import ProcessWidget
+from ui.widgets.system_widget import SystemWidget
 
 
 logger = logging.getLogger(__name__)
+
+# Outer window background (the "empty" framing area, like the cyan reference)
+OUTER_BACKGROUND_COLOR = "#14141f"
+
+# Inner content panel background (where all widgets/tabs actually live)
+CONTENT_BACKGROUND_COLOR = "#2a2a3e"
+
+# Space between the window edge and the content panel
+OUTER_MARGIN = 24
 
 
 class MainWindow(QMainWindow):
@@ -43,6 +59,10 @@ class MainWindow(QMainWindow):
         worker (WorkerThread): Background thread that continuously polls system metrics.
         update_timer (QTimer): Timer to update UI at intervals (fallback if signals fail).
         cpu_widget (CPUWidget): Displays live CPU usage.
+        memory_widget (MemoryWidget): Displays live RAM/Swap usage.
+        disk_widget (DiskWidget): Displays disk partition usage.
+        process_widget (ProcessWidget): Displays top 10 processes by memory.
+        system_widget (SystemWidget): Displays system overview info.
     """
 
     def __init__(self) -> None:
@@ -64,132 +84,116 @@ class MainWindow(QMainWindow):
         """
         Build the entire UI layout.
 
-        Creates:
-            1. Left sidebar with navigation buttons
-            2. Right content area with tabs (Dashboard, Processes, Storage, Settings)
-            3. Central widget that glues everything together
+        Structure:
+            QMainWindow
+              └─ outer_widget (dark background, provides the margin/frame)
+                   └─ content_panel (rounded, lighter background)
+                        └─ QTabWidget (Dashboard, Processes, Storage, Settings)
         """
-        # Central widget — parent for all UI elements
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # --- OUTER WIDGET (provides the framing margin) ---
+        outer_widget = QWidget()
+        self.setCentralWidget(outer_widget)
+        outer_widget.setStyleSheet(f"background-color: {OUTER_BACKGROUND_COLOR};")
 
-        # Main layout: horizontal (sidebar left, content right)
-        main_layout = QHBoxLayout()
-        central_widget.setLayout(main_layout)
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(
+            OUTER_MARGIN, OUTER_MARGIN, OUTER_MARGIN, OUTER_MARGIN
+        )
+        outer_widget.setLayout(outer_layout)
 
-        # --- LEFT SIDEBAR ---
-        sidebar = self._create_sidebar()
-        main_layout.addWidget(sidebar, stretch=0)  # Don't expand sidebar
+        # --- CONTENT PANEL (rounded card holding all real UI) ---
+        content_panel = QFrame()
+        content_panel.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CONTENT_BACKGROUND_COLOR};
+                border-radius: 16px;
+            }}
+        """
+        )
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_panel.setLayout(content_layout)
 
-        # --- RIGHT CONTENT AREA (Tabs) ---
+        outer_layout.addWidget(content_panel)
+
+        # --- TABS (now the only navigation — sidebar removed) ---
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
 
-        # --- DASHBOARD TAB (container for CPU/Memory/Disk/Process widgets) ---
-        self.tab_dashboard = QWidget()
+        # --- DASHBOARD TAB (scrollable container for overview widgets) ---
+        dashboard_content = QWidget()
         dashboard_layout = QVBoxLayout()
-        self.tab_dashboard.setLayout(dashboard_layout)
+        dashboard_layout.setSpacing(12)
+        dashboard_content.setLayout(dashboard_layout)
 
-        # Create and add CPU widget (Step 9)
+        # Create overview widgets (process table now lives in its own tab)
         self.cpu_widget = CPUWidget()
-        dashboard_layout.addWidget(self.cpu_widget)
+        self.memory_widget = MemoryWidget()
+        self.disk_widget = DiskWidget()
+        self.system_widget = SystemWidget()
 
-        # --- REMAINING TABS (still placeholders until later steps) ---
-        self.tab_processes = PlaceholderWidget("Processes")
+        dashboard_layout.addWidget(self.cpu_widget)
+        dashboard_layout.addWidget(self.memory_widget)
+        dashboard_layout.addWidget(self.disk_widget)
+        dashboard_layout.addWidget(self.system_widget)
+
+        dashboard_scroll = QScrollArea()
+        dashboard_scroll.setWidgetResizable(True)
+        dashboard_scroll.setWidget(dashboard_content)
+        dashboard_scroll.setStyleSheet(
+            "QScrollArea { background-color: transparent; border: none; }"
+        )
+
+        # --- PROCESSES TAB (dedicated home for the process table) ---
+        processes_content = QWidget()
+        processes_layout = QVBoxLayout()
+        processes_content.setLayout(processes_layout)
+
+        self.process_widget = ProcessWidget()
+        processes_layout.addWidget(self.process_widget)
+
+        # --- REMAINING TABS (placeholders for now) ---
         self.tab_storage = PlaceholderWidget("Storage Analyzer")
         self.tab_settings = PlaceholderWidget("Settings")
 
-        self.tabs.addTab(self.tab_dashboard, "📊 Dashboard")
-        self.tabs.addTab(self.tab_processes, "⚙️ Processes")
+        self.tabs.addTab(dashboard_scroll, "📊 Dashboard")
+        self.tabs.addTab(processes_content, "⚙️ Processes")
         self.tabs.addTab(self.tab_storage, "📁 Storage")
         self.tabs.addTab(self.tab_settings, "⚙️ Settings")
 
-        main_layout.addWidget(self.tabs, stretch=1)  # Expand content area
+        content_layout.addWidget(self.tabs)
 
-        # Dark theme colors
-        self.setStyleSheet(
-            """
-            QMainWindow { background-color: #2a2a3e; }
-            QTabWidget { background-color: #2a2a3e; }
-            QTabBar::tab { background-color: #3d3d52; color: #c0c0d0; padding: 8px 16px; }
-            QTabBar::tab:selected { background-color: #5d5d72; color: #ffffff; }
-        """
-        )
-
-    def _create_sidebar(self) -> QWidget:
-        """
-        Create the left sidebar with navigation.
-
-        Returns:
-            QWidget: Sidebar container.
-        """
-        sidebar = QWidget()
-        sidebar.setFixedWidth(200)
-        sidebar.setStyleSheet(
-            """
-            QWidget { background-color: #1f1f2e; }
-            QPushButton {
+        # Tab bar styling
+        self.tabs.setStyleSheet(
+            f"""
+            QTabWidget::pane {{
+                background-color: {CONTENT_BACKGROUND_COLOR};
+                border: none;
+                border-radius: 16px;
+            }}
+            QTabBar::tab {{
                 background-color: #3d3d52;
                 color: #c0c0d0;
-                border: none;
-                padding: 12px;
-                margin: 4px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
+                padding: 10px 20px;
+                margin-right: 4px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+            }}
+            QTabBar::tab:selected {{
                 background-color: #5d5d72;
                 color: #ffffff;
-            }
+            }}
         """
         )
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-
-        # Title
-        title = QLabel("SystemWatch")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setStyleSheet("color: #ffffff;")
-        layout.addWidget(title)
-
-        layout.addSpacing(20)
-
-        # Navigation buttons
-        nav_buttons = [
-            ("📊 Dashboard", lambda: self.tabs.setCurrentIndex(0)),
-            ("⚙️ Processes", lambda: self.tabs.setCurrentIndex(1)),
-            ("📁 Storage", lambda: self.tabs.setCurrentIndex(2)),
-            ("⚙️ Settings", lambda: self.tabs.setCurrentIndex(3)),
-        ]
-
-        for label, callback in nav_buttons:
-            btn = QPushButton(label)
-            btn.clicked.connect(callback)
-            layout.addWidget(btn)
-
-        layout.addStretch()
-
-        # Footer info
-        footer = QLabel("System is stable.\nCats are pleased. 😸")
-        footer.setStyleSheet("color: #888888; font-size: 10px;")
-        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(footer)
-
-        sidebar.setLayout(layout)
-        return sidebar
 
     def _start_worker(self) -> None:
         """
         Create and start the background worker thread.
 
-        The worker continuously polls CPU, RAM, disk, and process data
-        and emits Qt signals whenever new data is available. The signals
-        are connected to the UI widgets' update slots in _connect_signals().
+        The worker continuously polls CPU, RAM, disk, process, and system
+        data and emits Qt signals whenever new data is available. The
+        signals are connected to widget slots in _connect_signals().
         """
         self.worker = WorkerThread()
         self.worker.start()
@@ -206,10 +210,14 @@ class MainWindow(QMainWindow):
         if self.worker is None:
             return
 
-        # Connect CPU signals
         self.worker.metrics_updated_cpu.connect(self.cpu_widget.update_data)
+        self.worker.metrics_updated_memory.connect(self.memory_widget.update_data)
+        self.worker.metrics_updated_disk.connect(self.disk_widget.update_data)
+        self.worker.metrics_updated_processes.connect(
+            self.process_widget.update_data
+        )
+        self.worker.metrics_updated_system.connect(self.system_widget.update_data)
 
-        # Connect error signals
         self.worker.error.connect(self._on_worker_error)
 
         logger.info("Signals connected")

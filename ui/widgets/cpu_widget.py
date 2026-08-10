@@ -1,32 +1,32 @@
 """
 ui/widgets/cpu_widget.py
 -----------------------
-CPU usage widget with per-core breakdown (no chart — lightweight design).
+CPU usage widget styled as a bordered pixel-art card.
 
 Features:
-    - Large overall CPU percentage display
-    - Per-core progress bars (colored by load)
-    - Frequency display
-    - Responsive updates via Qt slots
+    - Card-style container: rounded border, header with title
+    - Large overall CPU percentage using pixel font
+    - Padded, pill-shaped progress bar
+    - Per-core breakdown as small boxes in a grid
+    - Footer row: core count / frequency
+    - Color-coded by load (green/yellow/red)
 
-Why no chart?
-    Matplotlib redraws (clear + replot + layout) are expensive operations
-    that run on the UI thread. Doing this every second causes visible
-    stutter and high CPU usage — a poor fit for a lightweight dashboard
-    on low-end hardware. Progress bars give the same "at a glance" info
-    at a fraction of the render cost.
-
-Design:
-    ┌─────────────────────────────────┐
-    │ CPU USAGE                       │
-    │ 45%                             │
-    │ 3.2 GHz | 8 Cores              │
-    ├─────────────────────────────────┤
-    │ Per-Core Breakdown:             │
-    │ Core 0: 52% ████████░░░░░░░░░░ │
-    │ Core 1: 38% ██████░░░░░░░░░░░░ │
-    │ ... (up to N cores)             │
-    └─────────────────────────────────┘
+Design (matches RAM usage card reference):
+    ┌─────────────────────────────────────┐
+    │ CPU USAGE                            │
+    │                                       │
+    │           65.6%                      │
+    │  ┌─────────────────────────────────┐│
+    │  │▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░│ │
+    │  └─────────────────────────────────┘│
+    │                                       │
+    │  Core 0  Core 1  Core 2  Core 3      │
+    │  ┌───┐  ┌───┐  ┌───┐  ┌───┐          │
+    │  │45%│  │12%│  │89%│  │22%│          │
+    │  └───┘  └───┘  └───┘  └───┘          │
+    │                                       │
+    │  Cores: 8              3.45 GHz      │
+    └─────────────────────────────────────┘
 """
 
 import logging
@@ -35,139 +35,198 @@ from typing import List
 from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QProgressBar,
-    QScrollArea,
     QWidget,
+    QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QFont
 
 from core.data_models import CPUMetrics
 from ui.widgets.base_widget import BaseWidget
+from ui.styles.fonts import get_pixel_font_family
 
 
 logger = logging.getLogger(__name__)
 
+CORES_PER_ROW = 8
+CORE_BOX_SIZE = 60
+
+# Card color palette (matches the RAM usage reference image)
+CARD_BORDER_COLOR = "#6a6a9a"
+CARD_BACKGROUND_COLOR = "#3d3d5c"
+CARD_INNER_BACKGROUND = "#2a2a44"
+ACCENT_COLOR = "#ff8fa3"  # Pink-red, CPU's accent color
+
 
 class CPUWidget(BaseWidget):
     """
-    Widget displaying real-time CPU usage metrics.
+    Widget displaying real-time CPU usage metrics, styled as a pixel-art card.
 
     Attributes:
-        overall_label (QLabel): Shows overall CPU % (large, bold)
-        freq_label (QLabel): Shows CPU frequency and core count
-        per_core_bars (List[QProgressBar]): Progress bar for each core
+        overall_label (QLabel): Shows overall CPU % (large, pixel font)
+        freq_label (QLabel): Shows CPU frequency (footer, right side)
+        cores_label (QLabel): Shows core count (footer, left side)
+        overall_bar (QProgressBar): Padded bar showing overall CPU load
+        core_grid_layout (QGridLayout): Container arranging core boxes in a grid
+        core_boxes (List[dict]): Widget references for each core box, in order
     """
 
     def __init__(self) -> None:
         """Initialize CPU widget."""
         super().__init__("CPU Monitor")
+        self.core_boxes: List[dict] = []
+        self._pixel_font = get_pixel_font_family()
         self._setup_ui()
         logger.debug("CPUWidget initialized")
 
     def _setup_ui(self) -> None:
-        """Build the UI layout."""
-        main_layout = QVBoxLayout()
-        self.setLayout(main_layout)
+        """Build the card-style UI layout."""
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(outer_layout)
 
-        # --- TITLE & FREQUENCY ---
-        title_layout = QHBoxLayout()
+        # --- CARD CONTAINER ---
+        card = QFrame()
+        card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_BACKGROUND_COLOR};
+                border: 2px solid {CARD_BORDER_COLOR};
+                border-radius: 14px;
+            }}
+        """
+        )
+        card_layout = QVBoxLayout()
+        card_layout.setContentsMargins(20, 16, 20, 16)
+        card_layout.setSpacing(10)
+        card.setLayout(card_layout)
 
+        outer_layout.addWidget(card)
+
+        # --- TITLE ---
         title = QLabel("CPU USAGE")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setStyleSheet("color: #ff8888;")
-        title_layout.addWidget(title)
-        title_layout.addStretch()
+        title.setFont(QFont(self._pixel_font, 11))
+        title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
+        card_layout.addWidget(title)
 
-        self.freq_label = QLabel("")
-        self.freq_label.setStyleSheet("color: #aaaaaa;")
-        title_layout.addWidget(self.freq_label)
-
-        main_layout.addLayout(title_layout)
-
-        # --- OVERALL PERCENTAGE (LARGE) ---
+        # --- OVERALL PERCENTAGE (LARGE, CENTERED) ---
         self.overall_label = QLabel("0%")
-        overall_font = QFont()
-        overall_font.setPointSize(48)
-        overall_font.setBold(True)
-        self.overall_label.setFont(overall_font)
+        self.overall_label.setFont(QFont(self._pixel_font, 22))
         self.overall_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.overall_label.setStyleSheet("color: #ff8888;")
-        main_layout.addWidget(self.overall_label)
+        self.overall_label.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
+        card_layout.addWidget(self.overall_label)
 
-        # --- PER-CORE PROGRESS BARS ---
-        cores_label = QLabel("Per-Core Breakdown:")
-        cores_label.setStyleSheet("color: #c0c0d0;")
-        main_layout.addWidget(cores_label)
+        # --- OVERALL PROGRESS BAR (padded, pill-shaped) ---
+        self.overall_bar = QProgressBar()
+        self.overall_bar.setMaximum(100)
+        self.overall_bar.setValue(0)
+        self.overall_bar.setTextVisible(False)
+        self.overall_bar.setFixedHeight(22)
+        self._style_pill_bar(self.overall_bar, ACCENT_COLOR)
+        card_layout.addWidget(self.overall_bar)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet(
-            """
-            QScrollArea { background-color: #2a2a3e; border: 1px solid #3d3d52; }
+        card_layout.addSpacing(6)
+
+        # --- PER-CORE GRID ---
+        grid_container = QWidget()
+        grid_container.setStyleSheet("border: none;")
+        self.core_grid_layout = QGridLayout()
+        self.core_grid_layout.setSpacing(8)
+        self.core_grid_layout.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        grid_container.setLayout(self.core_grid_layout)
+        card_layout.addWidget(grid_container)
+
+        card_layout.addSpacing(6)
+
+        # --- FOOTER ROW: Cores | Frequency ---
+        footer_layout = QHBoxLayout()
+
+        self.cores_label = QLabel("Cores: --")
+        self.cores_label.setFont(QFont(self._pixel_font, 8))
+        self.cores_label.setStyleSheet("color: #aaaaaa; border: none;")
+        footer_layout.addWidget(self.cores_label)
+
+        footer_layout.addStretch()
+
+        self.freq_label = QLabel("-- GHz")
+        self.freq_label.setFont(QFont(self._pixel_font, 8))
+        self.freq_label.setStyleSheet("color: #aaaaaa; border: none;")
+        footer_layout.addWidget(self.freq_label)
+
+        card_layout.addLayout(footer_layout)
+
+    def _create_core_box(self, core_index: int) -> dict:
+        """
+        Create a small square box for one CPU core, styled to match the card.
+
+        Args:
+            core_index: Which core this box represents (0-based).
+
+        Returns:
+            dict: References to the box's internal widgets, for later updates.
+        """
+        box = QFrame()
+        box.setFixedSize(CORE_BOX_SIZE, CORE_BOX_SIZE)
+        box.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_INNER_BACKGROUND};
+                border: 1px solid {CARD_BORDER_COLOR};
+                border-radius: 8px;
+            }}
         """
         )
 
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout()
-        scroll_widget.setLayout(scroll_layout)
+        box_layout = QVBoxLayout()
+        box_layout.setContentsMargins(4, 4, 4, 4)
+        box_layout.setSpacing(2)
+        box.setLayout(box_layout)
 
-        self.per_core_bars: List[QProgressBar] = []
+        core_label = QLabel(f"C{core_index}")
+        core_label.setFont(QFont(self._pixel_font, 6))
+        core_label.setStyleSheet("color: #888888; border: none;")
+        core_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        box_layout.addWidget(core_label)
 
-        # Create 16 placeholder progress bars (hidden if system has fewer cores)
-        for i in range(16):
-            bar_layout = QHBoxLayout()
+        percent_label = QLabel("0%")
+        percent_label.setFont(QFont(self._pixel_font, 9))
+        percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        percent_label.setStyleSheet("border: none;")
+        box_layout.addWidget(percent_label)
 
-            core_label = QLabel(f"Core {i}:")
-            core_label.setFixedWidth(80)
-            core_label.setStyleSheet("color: #aaaaaa;")
-            bar_layout.addWidget(core_label)
+        row = core_index // CORES_PER_ROW
+        col = core_index % CORES_PER_ROW
+        self.core_grid_layout.addWidget(box, row, col)
 
-            percent_label = QLabel("0%")
-            percent_label.setFixedWidth(40)
-            percent_label.setStyleSheet("color: #aaaaaa;")
-            bar_layout.addWidget(percent_label)
+        return {"box": box, "percent_label": percent_label}
 
-            progress_bar = QProgressBar()
-            progress_bar.setMaximum(100)
-            progress_bar.setValue(0)
-            progress_bar.setStyleSheet(
-                """
-                QProgressBar {
-                    border: 1px solid #3d3d52;
-                    border-radius: 4px;
-                    background-color: #1f1f2e;
-                    height: 18px;
-                }
-                QProgressBar::chunk {
-                    background-color: #ff8888;
-                    border-radius: 2px;
-                }
-            """
-            )
-            bar_layout.addWidget(progress_bar)
-            bar_layout.addStretch()
+    def _style_pill_bar(self, bar: QProgressBar, color: str) -> None:
+        """
+        Apply the padded, pill-shaped bar style seen in the reference image.
 
-            progress_bar.core_label = core_label
-            progress_bar.percent_label = percent_label
-
-            self.per_core_bars.append(progress_bar)
-            scroll_layout.addLayout(bar_layout)
-
-            core_label.hide()
-            percent_label.hide()
-            progress_bar.hide()
-
-        scroll_layout.addStretch()
-        scroll_area.setWidget(scroll_widget)
-        main_layout.addWidget(scroll_area, stretch=1)
-
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(10)
+        Args:
+            bar: Progress bar to style.
+            color: Fill color (hex string).
+        """
+        bar.setStyleSheet(
+            f"""
+            QProgressBar {{
+                background-color: {CARD_INNER_BACKGROUND};
+                border: 1px solid {CARD_BORDER_COLOR};
+                border-radius: 11px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {color};
+                border-radius: 9px;
+                margin: 2px;
+            }}
+        """
+        )
 
     @pyqtSlot(CPUMetrics)
     def update_data(self, metrics: CPUMetrics) -> None:
@@ -175,37 +234,33 @@ class CPUWidget(BaseWidget):
         Update widget with new CPU metrics.
 
         Called when WorkerThread emits metrics_updated_cpu signal.
-        Updates the overall label, frequency, and per-core bars.
+        Creates core boxes on first call, then updates everything in place.
 
         Args:
             metrics: CPUMetrics snapshot from monitor.
         """
         try:
             self.overall_label.setText(f"{metrics.overall_percent:.1f}%")
+            self.overall_bar.setValue(int(metrics.overall_percent))
 
-            self.freq_label.setText(
-                f"{metrics.frequency_ghz:.2f} GHz | {metrics.core_count} Cores"
-            )
+            self.cores_label.setText(f"Cores: {metrics.core_count}")
+            self.freq_label.setText(f"{metrics.frequency_ghz:.2f} GHz")
+
+            if not self.core_boxes:
+                for i in range(len(metrics.per_core_percents)):
+                    self.core_boxes.append(self._create_core_box(i))
 
             for i, core_percent in enumerate(metrics.per_core_percents):
-                if i >= len(self.per_core_bars):
+                if i >= len(self.core_boxes):
                     break
 
-                bar = self.per_core_bars[i]
+                widgets = self.core_boxes[i]
+                widgets["percent_label"].setText(f"{core_percent:.0f}%")
 
-                if bar.isHidden():
-                    bar.show()
-                    bar.core_label.show()
-                    bar.percent_label.show()
-
-                bar.setValue(int(core_percent))
-                bar.percent_label.setText(f"{core_percent:.1f}%")
-                self._color_bar(bar, core_percent)
-
-            for i in range(len(metrics.per_core_percents), len(self.per_core_bars)):
-                self.per_core_bars[i].hide()
-                self.per_core_bars[i].core_label.hide()
-                self.per_core_bars[i].percent_label.hide()
+                color = self._severity_color(core_percent)
+                widgets["percent_label"].setStyleSheet(
+                    f"color: {color}; border: none;"
+                )
 
             logger.debug("CPUWidget updated: %.1f%%", metrics.overall_percent)
 
@@ -213,32 +268,19 @@ class CPUWidget(BaseWidget):
             logger.error("Error updating CPU widget: %s", e)
             self.show_error(str(e))
 
-    def _color_bar(self, bar: QProgressBar, percent: float) -> None:
+    def _severity_color(self, percent: float) -> str:
         """
-        Set progress bar color based on CPU load.
+        Get a color string based on load severity.
 
         Args:
-            bar: Progress bar to color.
             percent: CPU percentage (0-100).
+
+        Returns:
+            str: Hex color code.
         """
         if percent < 50:
-            color = "#88ff88"  # Green
+            return "#88ff88"
         elif percent < 75:
-            color = "#ffff88"  # Yellow
+            return "#ffff88"
         else:
-            color = "#ff8888"  # Red
-
-        bar.setStyleSheet(
-            f"""
-            QProgressBar {{
-                border: 1px solid #3d3d52;
-                border-radius: 4px;
-                background-color: #1f1f2e;
-                height: 18px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 2px;
-            }}
-        """
-        )
+            return "#ff8888"
