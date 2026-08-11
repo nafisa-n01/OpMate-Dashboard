@@ -5,23 +5,24 @@ Disk partition widget styled as a pixel-art card containing per-drive
 mini-cards, matching the CPU/RAM card visual language.
 
 Features:
-    - Outer card container (title + border, matches CPU/RAM cards)
+    - Outer card container (title + icon + border, matches CPU/RAM cards)
     - Each partition gets its own small inner card inside the outer card
     - Big drive letter/name + percentage, small pill-shaped bar, GB text
-    - Cards arranged in a grid, wrapping automatically
+    - Cards arranged in a grid, wrapping automatically — sized to fit
+      more drives per row before wrapping to a second line
     - Updates every 5 seconds (disk usage changes slowly)
     - 4 pixel-art screw icons pinned to the outer card's corners
 
 Design (matches DISK USAGE reference image):
-    ┌───────────────────────────────────────────────┐
-    │ DISK USAGE                                     │
-    │  ┌─────────┐ ┌─────────┐ ┌─────────┐          │
-    │  │   C:\   │ │   D:\   │ │   E:\   │          │SCREW_ICON_PATH
-    │  │   77%   │ │   69%   │ │   26%   │          │
-    │  │▓▓▓▓░░░░│ │▓▓▓░░░░░│ │▓░░░░░░░│          │
-    │  │153/199GB│ │96/138GB │ │36/138GB │          │
-    │  └─────────┘ └─────────┘ └─────────┘          │
-    └───────────────────────────────────────────────┘
+    ┌───────────────────────────────────────────────────────────┐
+    │ [icon] DISK USAGE                                          │
+    │  ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐        │
+    │  │  C:\  │ │  D:\  │ │  E:\  │ │  F:\  │ │  G:\  │        │
+    │  │  77%  │ │  69%  │ │  26%  │ │  50%  │ │  43%  │        │
+    │  │▓▓▓░░░│ │▓▓░░░░│ │▓░░░░░│ │▓▓░░░░│ │▓▓░░░░│        │
+    │  │153/199│ │96/138 │ │36/138 │ │158/318│ │136/318│        │
+    │  └───────┘ └───────┘ └───────┘ └───────┘ └───────┘        │
+    └───────────────────────────────────────────────────────────┘
 """
 
 import logging
@@ -30,6 +31,7 @@ from typing import Dict
 
 from PyQt6.QtWidgets import (
     QVBoxLayout,
+    QHBoxLayout,
     QGridLayout,
     QLabel,
     QProgressBar,
@@ -46,9 +48,12 @@ from ui.styles.fonts import get_pixel_font_family
 
 logger = logging.getLogger(__name__)
 
-CARDS_PER_ROW = 4
-CARD_WIDTH = 130
-CARD_HEIGHT = 110
+# Increased from 4 to 6 so more drives fit in a single row before wrapping
+CARDS_PER_ROW = 6
+
+# Slightly smaller than before (was 130x110) to help more cards fit per row
+CARD_WIDTH = 110
+CARD_HEIGHT = 100
 
 # Card color palette (shared visual language with CPU/RAM widgets)
 CARD_BORDER_COLOR = "#6a6a9a"
@@ -59,6 +64,10 @@ ACCENT_COLOR = "#a888ff"  # Purple, Disk's accent color
 # Corner screw decoration
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
 SCREW_MARGIN = 4  # px from each edge of the card
+
+# Title icon
+DISK_ICON_PATH = os.path.join("assets", "icons", "disk_icon.png")
+TITLE_ICON_HEIGHT = 22  # px, scaled to fit next to the title text
 
 
 class _CardFrame(QFrame):
@@ -148,11 +157,31 @@ class DiskWidget(BaseWidget):
 
         outer_layout.addWidget(card)
 
-        # --- TITLE ---
+        # --- TITLE ROW (icon + text) ---
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(8)
+
+        disk_icon_pixmap = QPixmap(DISK_ICON_PATH)
+        if not disk_icon_pixmap.isNull():
+            icon_label = QLabel()
+            icon_label.setPixmap(
+                disk_icon_pixmap.scaledToHeight(
+                    TITLE_ICON_HEIGHT, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            icon_label.setStyleSheet("border: none;")
+            title_layout.addWidget(icon_label)
+        else:
+            logger.warning("Disk icon not loaded from '%s'", DISK_ICON_PATH)
+
         title = QLabel("DISK USAGE")
         title.setFont(QFont(self._pixel_font, 11))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
-        card_layout.addWidget(title)
+        title_layout.addWidget(title)
+
+        title_layout.addStretch()
+
+        card_layout.addLayout(title_layout)
 
         # --- MINI-CARD GRID ---
         grid_container = QWidget()
@@ -219,20 +248,20 @@ class DiskWidget(BaseWidget):
         )
 
         mini_layout = QVBoxLayout()
-        mini_layout.setContentsMargins(10, 8, 10, 8)
-        mini_layout.setSpacing(4)
+        mini_layout.setContentsMargins(8, 6, 8, 6)
+        mini_layout.setSpacing(3)
         mini_card.setLayout(mini_layout)
 
         # Device name (e.g., "C:\")
         device_label = QLabel(device)
-        device_label.setFont(QFont(self._pixel_font, 8))
+        device_label.setFont(QFont(self._pixel_font, 7))
         device_label.setStyleSheet("color: #ffffff; border: none;")
         device_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mini_layout.addWidget(device_label)
 
         # Big percentage number
         percent_label = QLabel("0%")
-        percent_label.setFont(QFont(self._pixel_font, 14))
+        percent_label.setFont(QFont(self._pixel_font, 12))
         percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         percent_label.setStyleSheet("border: none;")
         mini_layout.addWidget(percent_label)
@@ -242,7 +271,7 @@ class DiskWidget(BaseWidget):
         bar.setMaximum(100)
         bar.setValue(0)
         bar.setTextVisible(False)
-        bar.setFixedHeight(10)
+        bar.setFixedHeight(9)
         mini_layout.addWidget(bar)
 
         # Used/Total text (small, bottom)

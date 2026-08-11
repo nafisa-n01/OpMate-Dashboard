@@ -5,24 +5,28 @@ System overview widget styled as a pixel-art card, matching the visual
 language of CPU/RAM/Disk widgets.
 
 Features:
-    - Card-style container: rounded border, header with title
+    - Card-style container: rounded border, header with title + icon
     - Compact key-value rows (no bars needed — mostly static info)
     - Divider line separating static hardware info from live status info
     - Pixel font throughout
+    - 4 pixel-art screw icons pinned to the card's corners
 
 Design (matches SYSTEM card in the inspiration image):
     ┌─────────────────────────────────┐
-    │ SYSTEM                           │
+    │ [icon] SYSTEM                    │
     │  OS:          Windows 10         │
-    │  Uptime:      3h 24m             │
-    │  ─────────────────────────       │
+    │  Host:        DESKTOP-ABC1234    │
     │  CPU:         Intel i7 (8 cores) │
     │  RAM:         7.7 GB             │
+    │  ─────────────────────────       │
+    │  Uptime:      3h 24m             │
     │  Processes:   187                │
     └─────────────────────────────────┘
 """
 
 import logging
+import os
+from typing import List
 
 from PyQt6.QtWidgets import (
     QVBoxLayout,
@@ -31,7 +35,7 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 
 from core.data_models import SystemMetrics
 from core.monitors.system_monitor import SystemMonitor
@@ -45,6 +49,57 @@ logger = logging.getLogger(__name__)
 CARD_BORDER_COLOR = "#6a6a9a"
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 ACCENT_COLOR = "#88ccff"  # Blue, System's accent color
+
+# Corner screw decoration
+SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
+SCREW_MARGIN = 4  # px from each edge of the card
+
+# Title icon
+SYSTEM_ICON_PATH = os.path.join("assets", "icons", "system_icon.png")
+TITLE_ICON_HEIGHT = 22  # px, scaled to fit next to the title text
+
+
+class _CardFrame(QFrame):
+    """
+    QFrame subclass that keeps 4 corner "screw" icons pinned to its
+    corners, repositioning them whenever the frame is resized.
+    """
+
+    def __init__(self, screw_pixmap: QPixmap, margin: int = SCREW_MARGIN, parent=None) -> None:
+        super().__init__(parent)
+        self._margin = margin
+        self._screw_labels: List[QLabel] = []
+
+        if screw_pixmap is not None and not screw_pixmap.isNull():
+            for _ in range(4):
+                screw_label = QLabel(self)
+                screw_label.setPixmap(screw_pixmap)
+                screw_label.setFixedSize(screw_pixmap.width(), screw_pixmap.height())
+                screw_label.setStyleSheet("background: transparent; border: none;")
+                screw_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                screw_label.raise_()
+                self._screw_labels.append(screw_label)
+        else:
+            logger.warning("Screw icon not loaded from '%s'; skipping corner screws", SCREW_ICON_PATH)
+
+        self._position_screws()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_screws()
+
+    def _position_screws(self) -> None:
+        if len(self._screw_labels) != 4:
+            return
+
+        w, h = self.width(), self.height()
+        sw, sh = self._screw_labels[0].width(), self._screw_labels[0].height()
+        m = self._margin
+
+        self._screw_labels[0].move(m, m)                    # top-left
+        self._screw_labels[1].move(w - sw - m, m)            # top-right
+        self._screw_labels[2].move(m, h - sh - m)             # bottom-left
+        self._screw_labels[3].move(w - sw - m, h - sh - m)    # bottom-right
 
 
 class SystemWidget(BaseWidget):
@@ -70,7 +125,8 @@ class SystemWidget(BaseWidget):
         self.setLayout(outer_layout)
 
         # --- CARD CONTAINER ---
-        card = QFrame()
+        screw_pixmap = QPixmap(SCREW_ICON_PATH)
+        card = _CardFrame(screw_pixmap)
         card.setStyleSheet(
             f"""
             QFrame {{
@@ -87,11 +143,31 @@ class SystemWidget(BaseWidget):
 
         outer_layout.addWidget(card)
 
-        # --- TITLE ---
+        # --- TITLE ROW (icon + text) ---
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(8)
+
+        system_icon_pixmap = QPixmap(SYSTEM_ICON_PATH)
+        if not system_icon_pixmap.isNull():
+            icon_label = QLabel()
+            icon_label.setPixmap(
+                system_icon_pixmap.scaledToHeight(
+                    TITLE_ICON_HEIGHT, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            icon_label.setStyleSheet("border: none;")
+            title_layout.addWidget(icon_label)
+        else:
+            logger.warning("System icon not loaded from '%s'", SYSTEM_ICON_PATH)
+
         title = QLabel("SYSTEM")
         title.setFont(QFont(self._pixel_font, 11))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
-        card_layout.addWidget(title)
+        title_layout.addWidget(title)
+
+        title_layout.addStretch()
+
+        card_layout.addLayout(title_layout)
 
         card_layout.addSpacing(4)
 

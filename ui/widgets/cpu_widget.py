@@ -12,20 +12,23 @@ Features:
     - Color-coded by load (green/yellow/red)
     - 4 pixel-art screw icons pinned to the card's corners
 
+Shortened design note:
+    Vertical padding/spacing and a few font sizes were trimmed down
+    from the original version so this card takes up less height,
+    leaving room to place a decorative animated GIF beside it
+    (added separately in main_window.py, outside this widget's border).
+
 Design (matches RAM usage card reference):
     ┌─────────────────────────────────────┐
     │ CPU USAGE                            │
-    │                                       │
     │           65.6%                      │
     │  ┌─────────────────────────────────┐│
     │  │▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░│ │
     │  └─────────────────────────────────┘│
-    │                                       │SCREW_ICON_PATH = os.path.join("assets", "icon", "screw.png")
     │  Core 0  Core 1  Core 2  Core 3      │
-    │  ┌───┐  ┌───┐  ┌───┐  ┌───┐          │
-    │  │45%│  │12%│  │89%│  │22%│          │
-    │  └───┘  └───┘  └───┘  └───┘          │
-    │                                       │
+    │  ┌──┐  ┌──┐  ┌──┐  ┌──┐              │
+    │  │45│  │12│  │89│  │22│              │
+    │  └──┘  └──┘  └──┘  └──┘              │
     │  Cores: 8              3.45 GHz      │
     └─────────────────────────────────────┘
 """
@@ -54,7 +57,7 @@ from ui.styles.fonts import get_pixel_font_family
 logger = logging.getLogger(__name__)
 
 CORES_PER_ROW = 8
-CORE_BOX_SIZE = 60
+CORE_BOX_SIZE = 52  # was 60 — trimmed for a shorter card
 
 # Card color palette (matches the RAM usage reference image)
 CARD_BORDER_COLOR = "#6a6a9a"
@@ -65,6 +68,10 @@ ACCENT_COLOR = "#ff8fa3"  # Pink-red, CPU's accent color
 # Corner screw decoration
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
 SCREW_MARGIN = 4  # px from each edge of the card
+
+# Title icon
+CPU_ICON_PATH = os.path.join("assets", "icons", "cpu_icon.png")
+TITLE_ICON_HEIGHT = 20  # was 22 — trimmed slightly
 
 
 class _CardFrame(QFrame):
@@ -150,21 +157,41 @@ class CPUWidget(BaseWidget):
         """
         )
         card_layout = QVBoxLayout()
-        card_layout.setContentsMargins(20, 16, 20, 16)
-        card_layout.setSpacing(10)
+        card_layout.setContentsMargins(20, 10, 20, 10)  # was 20,16,20,16
+        card_layout.setSpacing(6)  # was 10
         card.setLayout(card_layout)
 
         outer_layout.addWidget(card)
 
-        # --- TITLE ---
+        # --- TITLE ROW (icon + text) ---
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(8)
+
+        cpu_icon_pixmap = QPixmap(CPU_ICON_PATH)
+        if not cpu_icon_pixmap.isNull():
+            icon_label = QLabel()
+            icon_label.setPixmap(
+                cpu_icon_pixmap.scaledToHeight(
+                    TITLE_ICON_HEIGHT, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            icon_label.setStyleSheet("border: none;")
+            title_layout.addWidget(icon_label)
+        else:
+            logger.warning("CPU icon not loaded from '%s'", CPU_ICON_PATH)
+
         title = QLabel("CPU USAGE")
         title.setFont(QFont(self._pixel_font, 11))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
-        card_layout.addWidget(title)
+        title_layout.addWidget(title)
+
+        title_layout.addStretch()
+
+        card_layout.addLayout(title_layout)
 
         # --- OVERALL PERCENTAGE (LARGE, CENTERED) ---
         self.overall_label = QLabel("0%")
-        self.overall_label.setFont(QFont(self._pixel_font, 22))
+        self.overall_label.setFont(QFont(self._pixel_font, 18))  # was 22
         self.overall_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.overall_label.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         card_layout.addWidget(self.overall_label)
@@ -174,24 +201,24 @@ class CPUWidget(BaseWidget):
         self.overall_bar.setMaximum(100)
         self.overall_bar.setValue(0)
         self.overall_bar.setTextVisible(False)
-        self.overall_bar.setFixedHeight(22)
+        self.overall_bar.setFixedHeight(16)  # was 22
         self._style_pill_bar(self.overall_bar, ACCENT_COLOR)
         card_layout.addWidget(self.overall_bar)
 
-        card_layout.addSpacing(6)
+        card_layout.addSpacing(4)  # was 6
 
         # --- PER-CORE GRID ---
         grid_container = QWidget()
         grid_container.setStyleSheet("border: none;")
         self.core_grid_layout = QGridLayout()
-        self.core_grid_layout.setSpacing(8)
+        self.core_grid_layout.setSpacing(6)  # was 8
         self.core_grid_layout.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         grid_container.setLayout(self.core_grid_layout)
         card_layout.addWidget(grid_container)
 
-        card_layout.addSpacing(6)
+        card_layout.addSpacing(4)  # was 6
 
         # --- FOOTER ROW: Cores | Frequency ---
         footer_layout = QHBoxLayout()
@@ -233,8 +260,8 @@ class CPUWidget(BaseWidget):
         )
 
         box_layout = QVBoxLayout()
-        box_layout.setContentsMargins(4, 4, 4, 4)
-        box_layout.setSpacing(2)
+        box_layout.setContentsMargins(3, 3, 3, 3)
+        box_layout.setSpacing(1)
         box.setLayout(box_layout)
 
         core_label = QLabel(f"C{core_index}")
@@ -244,7 +271,7 @@ class CPUWidget(BaseWidget):
         box_layout.addWidget(core_label)
 
         percent_label = QLabel("0%")
-        percent_label.setFont(QFont(self._pixel_font, 9))
+        percent_label.setFont(QFont(self._pixel_font, 8))  # was 9
         percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         percent_label.setStyleSheet("border: none;")
         box_layout.addWidget(percent_label)
@@ -268,11 +295,11 @@ class CPUWidget(BaseWidget):
             QProgressBar {{
                 background-color: {CARD_INNER_BACKGROUND};
                 border: 1px solid {CARD_BORDER_COLOR};
-                border-radius: 11px;
+                border-radius: 8px;
             }}
             QProgressBar::chunk {{
                 background-color: {color};
-                border-radius: 9px;
+                border-radius: 6px;
                 margin: 2px;
             }}
         """

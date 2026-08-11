@@ -16,7 +16,7 @@ Features:
 
 Design (matches RAM usage reference image):
     ┌─────────────────────────────────────┐
-    │ RAM USAGE                            │
+    │ [icon] RAM USAGE                     │
     │        7.2 GB / 7.7 GB (93.5%)       │
     │  ┌─────────────────────────────────┐│
     │  │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░│ │
@@ -58,6 +58,10 @@ ACCENT_COLOR = "#88ff88"  # Green, RAM's accent color
 # Corner screw decoration
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
 SCREW_MARGIN = 4  # px from each edge of the card
+
+# Title icon
+MEMORY_ICON_PATH = os.path.join("assets", "icons", "memory_icon.png")
+TITLE_ICON_HEIGHT = 22  # px, scaled to fit next to the title text
 
 
 class _CardFrame(QFrame):
@@ -149,11 +153,31 @@ class MemoryWidget(BaseWidget):
 
         outer_layout.addWidget(card)
 
-        # --- TITLE ---
+        # --- TITLE ROW (icon + text) ---
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(8)
+
+        memory_icon_pixmap = QPixmap(MEMORY_ICON_PATH)
+        if not memory_icon_pixmap.isNull():
+            icon_label = QLabel()
+            icon_label.setPixmap(
+                memory_icon_pixmap.scaledToHeight(
+                    TITLE_ICON_HEIGHT, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            icon_label.setStyleSheet("border: none;")
+            title_layout.addWidget(icon_label)
+        else:
+            logger.warning("Memory icon not loaded from '%s'", MEMORY_ICON_PATH)
+
         title = QLabel("RAM USAGE")
         title.setFont(QFont(self._pixel_font, 11))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
-        card_layout.addWidget(title)
+        title_layout.addWidget(title)
+
+        title_layout.addStretch()
+
+        card_layout.addLayout(title_layout)
 
         # --- STAT LINE (e.g. "7.2 GB / 7.7 GB (93.5%)") ---
         self.overall_label = QLabel("0 GB / 0 GB (0%)")
