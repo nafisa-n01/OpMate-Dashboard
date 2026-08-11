@@ -5,23 +5,26 @@ System overview widget styled as a pixel-art card, matching the visual
 language of CPU/RAM/Disk widgets.
 
 Features:
-    - Card-style container: rounded border, header with title + icon
+    - Card-style container: rounded border
+    - Animated GIF decoration on the left side of the card (via QMovie),
+      vertically centered against the card and scaled with nearest-
+      neighbor filtering to keep pixel art crisp (no blur)
     - Compact key-value rows (no bars needed — mostly static info)
     - Divider line separating static hardware info from live status info
     - Pixel font throughout
     - 4 pixel-art screw icons pinned to the card's corners
 
-Design (matches SYSTEM card in the inspiration image):
-    ┌─────────────────────────────────┐
-    │ [icon] SYSTEM                    │
-    │  OS:          Windows 10         │
-    │  Host:        DESKTOP-ABC1234    │
-    │  CPU:         Intel i7 (8 cores) │
-    │  RAM:         7.7 GB             │
-    │  ─────────────────────────       │
-    │  Uptime:      3h 24m             │
-    │  Processes:   187                │
-    └─────────────────────────────────┘
+Design:
+    ┌──────────────────────────────────────────┐
+    │             SYSTEM                        │
+    │  ┌──────┐  OS:          Windows 10        │
+    │  │      │  Host:        DESKTOP-ABC1234   │
+    │  │ GIF  │  CPU:         Intel i7 (8 cores)│
+    │  │      │  RAM:         7.7 GB            │
+    │  └──────┘  ─────────────────────────      │
+    │             Uptime:      3h 24m           │
+    │             Processes:   187              │
+    └──────────────────────────────────────────┘
 """
 
 import logging
@@ -34,8 +37,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QFrame,
 )
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtCore import Qt, QSize, pyqtSlot
+from PyQt6.QtGui import QFont, QPixmap, QMovie
 
 from core.data_models import SystemMetrics
 from core.monitors.system_monitor import SystemMonitor
@@ -54,9 +57,13 @@ ACCENT_COLOR = "#88ccff"  # Blue, System's accent color
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
 SCREW_MARGIN = 4  # px from each edge of the card
 
-# Title icon
-SYSTEM_ICON_PATH = os.path.join("assets", "icons", "system_icon.png")
-TITLE_ICON_HEIGHT = 22  # px, scaled to fit next to the title text
+# Left-side animated decoration.
+# Source GIF is native 48x48 — scaling to 96x96 (2x) keeps pixel art
+# crisp (clean integer multiple). If you want it bigger later, use
+# another clean multiple: 144 (3x) or 192 (4x) — avoid odd sizes,
+# which cause uneven/blurry scaling of pixel art.
+SYSTEM_GIF_PATH = os.path.join("assets", "icons", "system_icon.gif")
+GIF_DISPLAY_SIZE = QSize(96, 96)
 
 
 class _CardFrame(QFrame):
@@ -108,12 +115,14 @@ class SystemWidget(BaseWidget):
 
     Attributes:
         row_labels (dict): Maps field name -> QLabel (value side) for updates.
+        gif_movie (QMovie): The animated decoration playing on the left side.
     """
 
     def __init__(self) -> None:
         """Initialize system widget."""
         super().__init__("System Overview")
         self.row_labels = {}
+        self.gif_movie: QMovie = None
         self._pixel_font = get_pixel_font_family()
         self._setup_ui()
         logger.debug("SystemWidget initialized")
@@ -136,40 +145,46 @@ class SystemWidget(BaseWidget):
             }}
         """
         )
-        card_layout = QVBoxLayout()
+
+        # Card is split horizontally: [animated GIF] | [content column]
+        card_layout = QHBoxLayout()
         card_layout.setContentsMargins(20, 16, 20, 16)
-        card_layout.setSpacing(8)
+        card_layout.setSpacing(16)
         card.setLayout(card_layout)
 
         outer_layout.addWidget(card)
 
-        # --- TITLE ROW (icon + text) ---
-        title_layout = QHBoxLayout()
-        title_layout.setSpacing(8)
+        # --- LEFT SIDE: ANIMATED GIF (vertically centered against the card) ---
+        gif_label = QLabel()
+        gif_label.setFixedSize(GIF_DISPLAY_SIZE)
+        gif_label.setStyleSheet("border: none;")
+        gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        system_icon_pixmap = QPixmap(SYSTEM_ICON_PATH)
-        if not system_icon_pixmap.isNull():
-            icon_label = QLabel()
-            icon_label.setPixmap(
-                system_icon_pixmap.scaledToHeight(
-                    TITLE_ICON_HEIGHT, Qt.TransformationMode.SmoothTransformation
-                )
-            )
-            icon_label.setStyleSheet("border: none;")
-            title_layout.addWidget(icon_label)
+        if os.path.exists(SYSTEM_GIF_PATH):
+            self.gif_movie = QMovie(SYSTEM_GIF_PATH)
+            self.gif_movie.setScaledSize(GIF_DISPLAY_SIZE)
+            # Nearest-neighbor scaling keeps pixel art crisp — smooth
+            # scaling (Qt's default) blurs hard pixel edges, which
+            # looks wrong for pixel-art assets.
+            self.gif_movie.setCacheMode(QMovie.CacheMode.CacheAll)
+            gif_label.setMovie(self.gif_movie)
+            self.gif_movie.start()
         else:
-            logger.warning("System icon not loaded from '%s'", SYSTEM_ICON_PATH)
+            logger.warning("System GIF not found at '%s'", SYSTEM_GIF_PATH)
 
+        card_layout.addWidget(gif_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        # --- RIGHT SIDE: CONTENT COLUMN ---
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(8)
+
+        # --- TITLE (text only — icon replaced by the GIF on the left) ---
         title = QLabel("SYSTEM")
         title.setFont(QFont(self._pixel_font, 11))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
-        title_layout.addWidget(title)
+        content_layout.addWidget(title)
 
-        title_layout.addStretch()
-
-        card_layout.addLayout(title_layout)
-
-        card_layout.addSpacing(4)
+        content_layout.addSpacing(4)
 
         # Define rows: (internal key, display label)
         static_rows = [
@@ -184,19 +199,21 @@ class SystemWidget(BaseWidget):
         ]
 
         for key, label_text in static_rows:
-            card_layout.addLayout(self._create_row(key, label_text))
+            content_layout.addLayout(self._create_row(key, label_text))
 
         # Divider between static and dynamic info
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
         divider.setStyleSheet(f"background-color: {CARD_BORDER_COLOR}; border: none;")
         divider.setFixedHeight(2)
-        card_layout.addSpacing(4)
-        card_layout.addWidget(divider)
-        card_layout.addSpacing(4)
+        content_layout.addSpacing(4)
+        content_layout.addWidget(divider)
+        content_layout.addSpacing(4)
 
         for key, label_text in dynamic_rows:
-            card_layout.addLayout(self._create_row(key, label_text))
+            content_layout.addLayout(self._create_row(key, label_text))
+
+        card_layout.addLayout(content_layout, stretch=1)
 
     def _create_row(self, key: str, label_text: str) -> QHBoxLayout:
         """
@@ -214,7 +231,9 @@ class SystemWidget(BaseWidget):
         label = QLabel(f"{label_text}:")
         label.setFont(QFont(self._pixel_font, 8))
         label.setStyleSheet("color: #aaaaaa; border: none;")
-        label.setFixedWidth(90)
+        # Widened from 90 to 110 — "Processes:" (10 chars) was getting
+        # clipped by the value label starting too close behind it.
+        label.setFixedWidth(110)
         row_layout.addWidget(label)
 
         value_label = QLabel("--")

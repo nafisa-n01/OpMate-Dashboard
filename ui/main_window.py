@@ -5,7 +5,7 @@ Main application window controller.
 
 Responsibilities:
     - Create the main window and set its properties
-    - Build the tab-based interface (Dashboard, Processes, Storage, Settings)
+    - Build the tab-based interface (Dashboard, Processes, Storage)
     - Instantiate the background worker thread
     - Connect worker signals to widget slots (glue layer between core and UI)
     - Handle cleanup when the app closes
@@ -16,19 +16,26 @@ Layout design:
     "panel within a panel" look. Tabs use an underline style (no filled
     background) to keep navigation lightweight, styled in the same
     pixel font used across all the metric cards.
+
+    A static pixel-art image sits beside the CPU widget (outside its
+    card border), aligned with the card on the dashboard.
 """
 
 import logging
+import os
 from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QTabWidget,
     QScrollArea,
+    QLabel,
 )
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtGui import QPixmap
 
 from core.worker_thread import WorkerThread
 from ui.widgets.placeholder_widget import PlaceholderWidget
@@ -37,6 +44,7 @@ from ui.widgets.memory_widget import MemoryWidget
 from ui.widgets.disk_widget import DiskWidget
 from ui.widgets.process_widget import ProcessWidget
 from ui.widgets.system_widget import SystemWidget
+from ui.widgets.storage_widget import StorageWidget
 from ui.styles.fonts import get_pixel_font_family
 
 
@@ -56,6 +64,16 @@ CARD_SPACING = 24
 
 # Padding around the scrollable dashboard content itself
 DASHBOARD_MARGIN = 4
+
+# Static decorative image placed beside the CPU widget (outside its card border)
+MAIN_ICON_PATH = os.path.join("assets", "icons", "main_icon.png")
+MAIN_ICON_SIZE = QSize(175, 112)  # same footprint as the previous GIF
+
+# Horizontal gap between the CPU widget and its adjacent image
+CPU_ROW_SPACING = 20
+
+# Vertical gap between the decorative image and the caption label below it
+ICON_CAPTION_SPACING = 6
 
 
 class MainWindow(QMainWindow):
@@ -97,6 +115,7 @@ class MainWindow(QMainWindow):
               └─ central_widget (flat background, provides the outer margin)
                    └─ QTabWidget (underline-style tabs, pixel font, no filled panel)
                         └─ dashboard_content (cards with generous gaps)
+                             └─ cpu_row (CPU widget + decorative image, side by side)
         """
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -127,7 +146,52 @@ class MainWindow(QMainWindow):
         self.disk_widget = DiskWidget()
         self.system_widget = SystemWidget()
 
-        dashboard_layout.addWidget(self.cpu_widget)
+        # --- CPU ROW: CPU widget + decorative image side by side ---
+        cpu_row_layout = QHBoxLayout()
+        cpu_row_layout.setSpacing(CPU_ROW_SPACING)
+        cpu_row_layout.addWidget(self.cpu_widget, stretch=1)
+
+        # Wrap the image and its caption in a vertical layout so the
+        # caption sits directly under the image
+        icon_column_layout = QVBoxLayout()
+        icon_column_layout.setSpacing(ICON_CAPTION_SPACING)
+        icon_column_layout.setContentsMargins(0, 0, 0, 0)
+
+        icon_label = QLabel()
+        icon_label.setFixedSize(MAIN_ICON_SIZE)
+        icon_label.setStyleSheet("border: none;")
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        main_icon_pixmap = QPixmap(MAIN_ICON_PATH)
+        if not main_icon_pixmap.isNull():
+            icon_label.setPixmap(
+                main_icon_pixmap.scaled(
+                    MAIN_ICON_SIZE,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.FastTransformation,
+                )
+            )
+        else:
+            logger.warning("Main icon not found at '%s'", MAIN_ICON_PATH)
+
+        icon_caption_label = QLabel("Your current PC operations")
+        icon_caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_caption_label.setStyleSheet(
+            f"""
+            color: #888899;
+            font-family: '{self._pixel_font}';
+            font-size: 8pt;
+            border: none;
+            """
+        )
+
+        icon_column_layout.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        icon_column_layout.addWidget(icon_caption_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # Center the image column vertically alongside the CPU card
+        cpu_row_layout.addLayout(icon_column_layout)
+
+        dashboard_layout.addLayout(cpu_row_layout)
         dashboard_layout.addWidget(self.memory_widget)
         dashboard_layout.addWidget(self.disk_widget)
         dashboard_layout.addWidget(self.system_widget)
@@ -150,14 +214,12 @@ class MainWindow(QMainWindow):
         self.process_widget = ProcessWidget()
         processes_layout.addWidget(self.process_widget)
 
-        # --- REMAINING TABS (placeholders for now) ---
-        self.tab_storage = PlaceholderWidget("Storage Analyzer")
-        self.tab_settings = PlaceholderWidget("Settings")
+        # --- STORAGE TAB ---
+        self.tab_storage = StorageWidget()
 
         self.tabs.addTab(dashboard_scroll, "Dashboard")
         self.tabs.addTab(processes_content, "Processes")
         self.tabs.addTab(self.tab_storage, "Storage")
-        self.tabs.addTab(self.tab_settings, "Settings")
 
         central_layout.addWidget(self.tabs)
 
