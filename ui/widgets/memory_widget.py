@@ -11,25 +11,24 @@ Features:
     - Padded, pill-shaped progress bar (matches reference image)
     - Footer row: Used | Available (matches reference image)
     - Swap row only appears if swap is actually configured
-    - Color-coded by load (green/yellow/red)
+    - Color-coded by load (sage green/muted blue/muted terracotta)
     - 4 pixel-art screw icons pinned to the card's corners
     - Soft drop shadow behind the card for subtle depth
     - Thin accent-colored underline beneath the title text
-    - Card border tints toward the current severity color (green →
-      yellow → red) as RAM usage rises — purely visual, reuses the
-      existing severity thresholds already driving the bar/labels
+    - Card has NO border (borderless, background + rounded corners
+      only) — status is conveyed via the bar/text colors instead
 
 Design (matches RAM usage reference image):
     ┌─────────────────────────────────────┐
-    │ [icon] RAM USAGE                     │
-    │ ▔▔▔▔▔▔▔▔▔ (underline accent)         │
-    │        7.2 GB / 7.7 GB (93.5%)       │
-    │  ┌─────────────────────────────────┐│
-    │  │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░│ │
-    │  └─────────────────────────────────┘│
-    │  Used: 7.2 GB          Available:0.5 │
-    │                                       │
-    │  Swap: 1.6/12.0 GB (13%)             │
+      [icon] RAM USAGE
+      ▔▔▔▔▔▔▔▔▔ (underline accent)
+             7.2 GB / 7.7 GB (93.5%)
+       ┌─────────────────────────────────┐
+       │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░│
+       └─────────────────────────────────┘
+       Used: 7.2 GB          Available:0.5
+
+       Swap: 1.6/12.0 GB (13%)
     └─────────────────────────────────────┘
 """
 
@@ -56,11 +55,11 @@ logger = logging.getLogger(__name__)
 
 SWAP_WARNING_THRESHOLD = 50  # Show warning if swap > 50%
 
-# Card color palette (shared visual language with CPU widget)
-CARD_BORDER_COLOR = "#6a6a9a"
+# Card color palette (shared visual language with CPU widget).
+# No CARD_BORDER_COLOR here — this card is intentionally borderless.
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 CARD_INNER_BACKGROUND = "#2a2a44"
-ACCENT_COLOR = "#88ff88"  # Green, RAM's accent color
+ACCENT_COLOR = "#8FD6A3"  # Sage Green, RAM's accent color
 
 # Corner screw decoration
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
@@ -80,9 +79,9 @@ SHADOW_BLUR_RADIUS = 24
 SHADOW_OFFSET_Y = 6
 SHADOW_COLOR = QColor(0, 0, 0, 160)  # semi-transparent black
 
-# Severity-tinted border: same thresholds/colors as the rest of the card
-# (bar, footer text), applied to the card's own border.
-BORDER_SEVERITY_COLORS = ("#88ff88", "#ffff88", "#ff8888")  # <60 / <80 / >=80
+# Severity palette (shared meaning across all widgets):
+# safe = sage green, ok = muted blue, severe = muted terracotta
+BORDER_SEVERITY_COLORS = ("#8FD6A3", "#82B5D8", "#D97A6B")  # <60 / <80 / >=80
 
 
 class _CardFrame(QFrame):
@@ -133,8 +132,8 @@ class MemoryWidget(BaseWidget):
     Widget displaying real-time memory usage metrics, styled as a compact card.
 
     Attributes:
-        card (_CardFrame): The outer card frame — kept as an attribute so
-            its border color can be re-styled as severity changes.
+        card (_CardFrame): The outer card frame. Borderless — only
+            background, rounded corners, and a drop shadow.
         overall_label (QLabel): Shows "7.2 GB / 7.7 GB (93.5%)"
         ram_bar (QProgressBar): Padded, pill-shaped bar for RAM usage
         used_label (QLabel): Footer left — "Used: 7.2 GB"
@@ -157,10 +156,18 @@ class MemoryWidget(BaseWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(outer_layout)
 
-        # --- CARD CONTAINER ---
+        # --- CARD CONTAINER (borderless — background + rounded corners only) ---
         screw_pixmap = QPixmap(SCREW_ICON_PATH)
         self.card = _CardFrame(screw_pixmap)
-        self._apply_card_border(CARD_BORDER_COLOR)
+        self.card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_BACKGROUND_COLOR};
+                border: none;
+                border-radius: 14px;
+            }}
+        """
+        )
 
         # Soft drop shadow behind the card. Applied to the card itself
         # (not the outer widget) so it reads as the card's own depth.
@@ -262,7 +269,7 @@ class MemoryWidget(BaseWidget):
 
         self.swap_warning_label = QLabel("")
         self.swap_warning_label.setFont(QFont(self._pixel_font, 7))
-        self.swap_warning_label.setStyleSheet("color: #ff8888; border: none;")
+        self.swap_warning_label.setStyleSheet("color: #D97A6B; border: none;")
         swap_header_layout.addWidget(self.swap_warning_label)
 
         self.swap_row.addLayout(swap_header_layout)
@@ -272,32 +279,11 @@ class MemoryWidget(BaseWidget):
         self.swap_bar.setValue(0)
         self.swap_bar.setTextVisible(False)
         self.swap_bar.setFixedHeight(10)
-        self._style_pill_bar(self.swap_bar, "#ffff88")
+        self._style_pill_bar(self.swap_bar, "#82B5D8")
         self.swap_bar.hide()
         self.swap_row.addWidget(self.swap_bar)
 
         card_layout.addLayout(self.swap_row)
-
-    def _apply_card_border(self, border_color: str) -> None:
-        """
-        (Re)apply the card's stylesheet with the given border color.
-
-        Kept as its own method so update_data() can retint the border
-        toward the current severity color without touching anything
-        else about the card's styling.
-
-        Args:
-            border_color: Hex color string for the card's border.
-        """
-        self.card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {CARD_BACKGROUND_COLOR};
-                border: 2px solid {border_color};
-                border-radius: 14px;
-            }}
-        """
-        )
 
     def _style_pill_bar(self, bar: QProgressBar, color: str) -> None:
         """
@@ -311,7 +297,7 @@ class MemoryWidget(BaseWidget):
             f"""
             QProgressBar {{
                 background-color: {CARD_INNER_BACKGROUND};
-                border: 1px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 9px;
             }}
             QProgressBar::chunk {{
@@ -347,10 +333,6 @@ class MemoryWidget(BaseWidget):
             self._style_pill_bar(
                 self.ram_bar, self._severity_color(metrics.ram_percent)
             )
-
-            # Retint the card border toward the current severity color —
-            # purely visual, reuses the same thresholds as everything else.
-            self._apply_card_border(self._severity_color(metrics.ram_percent))
 
             self.used_label.setText(f"Used: {ram_used_gb:.1f} GB")
             self.available_label.setText(f"Available: {ram_available_gb:.1f} GB")

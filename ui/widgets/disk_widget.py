@@ -5,8 +5,10 @@ Disk partition widget styled as a pixel-art card containing per-drive
 mini-cards, matching the CPU/RAM card visual language.
 
 Features:
-    - Outer card container (title + icon + border, matches CPU/RAM cards)
-    - Each partition gets its own small inner card inside the outer card
+    - Outer card container (title + icon, no border — borderless card
+      with background + rounded corners + drop shadow only)
+    - Each partition gets its own small inner mini-card (also borderless,
+      distinguished by its own background against the outer card)
     - Big drive letter/name + percentage, small pill-shaped bar, GB text
     - Cards arranged in a grid, wrapping automatically — sized to fit
       more drives per row before wrapping to a second line
@@ -14,22 +16,20 @@ Features:
     - 4 pixel-art screw icons pinned to the outer card's corners
     - Soft drop shadow behind the outer card for subtle depth
     - Thin accent-colored underline beneath the title text
-    - Outer card border tints toward the WORST severity found across
-      all partitions (green -> yellow -> red); each individual
-      mini-card's own border also tints to that partition's own
-      severity — both purely visual, reusing the existing
-      _severity_color() thresholds already driving bars/labels
+    - Severity color (safe/ok/severe) now shown via each mini-card's
+      percentage text and bar fill only — no border retinting, since
+      neither card has a border anymore
 
 Design (matches DISK USAGE reference image):
     ┌───────────────────────────────────────────────────────────┐
-    │ [icon] DISK USAGE                                          │
-    │ ▔▔▔▔▔▔▔▔▔▔ (underline accent)                              │
-    │  ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐        │
-    │  │  C:\  │ │  D:\  │ │  E:\  │ │  F:\  │ │  G:\  │        │
-    │  │  77%  │ │  69%  │ │  26%  │ │  50%  │ │  43%  │        │
-    │  │▓▓▓░░░│ │▓▓░░░░│ │▓░░░░░│ │▓▓░░░░│ │▓▓░░░░│        │
-    │  │153/199│ │96/138 │ │36/138 │ │158/318│ │136/318│        │
-    │  └───────┘ └───────┘ └───────┘ └───────┘ └───────┘        │
+      [icon] DISK USAGE
+      ▔▔▔▔▔▔▔▔▔▔ (underline accent)
+       ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐ ┌───────┐
+       │  C:\  │ │  D:\  │ │  E:\  │ │  F:\  │ │  G:\  │
+       │  77%  │ │  69%  │ │  26%  │ │  50%  │ │  43%  │
+       │▓▓▓░░░│ │▓▓░░░░│ │▓░░░░░│ │▓▓░░░░│ │▓▓░░░░│
+       │153/199│ │96/138 │ │36/138 │ │158/318│ │136/318│
+       └───────┘ └───────┘ └───────┘ └───────┘ └───────┘
     └───────────────────────────────────────────────────────────┘
 """
 
@@ -64,11 +64,12 @@ CARDS_PER_ROW = 6
 CARD_WIDTH = 110
 CARD_HEIGHT = 100
 
-# Card color palette (shared visual language with CPU/RAM widgets)
-CARD_BORDER_COLOR = "#6a6a9a"
+# Card color palette (shared visual language with CPU/RAM widgets).
+# No CARD_BORDER_COLOR here — both outer card and mini-cards are
+# intentionally borderless.
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 CARD_INNER_BACKGROUND = "#2a2a44"
-ACCENT_COLOR = "#a888ff"  # Purple, Disk's accent color
+ACCENT_COLOR = "#B8B4E8"  # Lavender, Disk's accent color
 
 # Corner screw decoration
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
@@ -88,9 +89,10 @@ SHADOW_BLUR_RADIUS = 24
 SHADOW_OFFSET_Y = 6
 SHADOW_COLOR = QColor(0, 0, 0, 160)  # semi-transparent black
 
-# Severity-tinted borders: same thresholds/colors as bars/labels.
-# Index 0 = safe/green, 1 = warning/yellow, 2 = critical/red.
-BORDER_SEVERITY_COLORS = ("#88ff88", "#ffff88", "#ff8888")  # <60 / <80 / >=80
+# Severity palette (shared meaning across all widgets):
+# safe = sage green, ok = muted blue, severe = muted terracotta.
+# Now only drives percent-text and bar-fill colors — no border tinting.
+BORDER_SEVERITY_COLORS = ("#8FD6A3", "#82B5D8", "#D97A6B")  # <60 / <80 / >=80
 
 
 class _CardFrame(QFrame):
@@ -142,9 +144,8 @@ class DiskWidget(BaseWidget):
     a bordered outer card.
 
     Attributes:
-        card (_CardFrame): The outer card frame — kept as an attribute so
-            its border color can be re-styled toward the worst severity
-            found among all partitions.
+        card (_CardFrame): The outer card frame. Borderless — only
+            background, rounded corners, and a drop shadow.
         grid_layout (QGridLayout): Container that arranges disk mini-cards.
         partition_cards (Dict[str, dict]): Maps device name -> mini-card
             widget references for in-place updates.
@@ -164,10 +165,18 @@ class DiskWidget(BaseWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(outer_layout)
 
-        # --- OUTER CARD CONTAINER ---
+        # --- OUTER CARD CONTAINER (borderless — background + rounded corners only) ---
         screw_pixmap = QPixmap(SCREW_ICON_PATH)
         self.card = _CardFrame(screw_pixmap)
-        self._apply_card_border(CARD_BORDER_COLOR)
+        self.card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_BACKGROUND_COLOR};
+                border: none;
+                border-radius: 14px;
+            }}
+        """
+        )
 
         # Soft drop shadow behind the outer card. Applied to the card
         # itself (not the outer widget) so it reads as the card's own
@@ -240,27 +249,6 @@ class DiskWidget(BaseWidget):
 
         card_layout.addWidget(grid_container)
 
-    def _apply_card_border(self, border_color: str) -> None:
-        """
-        (Re)apply the outer card's stylesheet with the given border color.
-
-        Kept as its own method so update_data() can retint the border
-        toward the worst severity found among partitions, without
-        touching anything else about the card's styling.
-
-        Args:
-            border_color: Hex color string for the outer card's border.
-        """
-        self.card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {CARD_BACKGROUND_COLOR};
-                border: 2px solid {border_color};
-                border-radius: 14px;
-            }}
-        """
-        )
-
     @pyqtSlot(DiskMetrics)
     def update_data(self, metrics: DiskMetrics) -> None:
         """
@@ -268,8 +256,6 @@ class DiskWidget(BaseWidget):
 
         Creates a mini-card per partition on first call. On subsequent
         calls, updates existing cards in place (avoids UI flicker).
-        Also retints the outer card border toward the worst severity
-        found among all partitions.
 
         Args:
             metrics: DiskMetrics snapshot from monitor.
@@ -278,17 +264,11 @@ class DiskWidget(BaseWidget):
             if self.placeholder_label is not None:
                 self.placeholder_label.hide()
 
-            worst_percent = 0.0
-
             for partition in metrics.partitions:
                 if partition.device not in self.partition_cards:
                     self._create_partition_card(partition.device)
 
                 self._update_partition_card(partition)
-                worst_percent = max(worst_percent, partition.percent)
-
-            if metrics.partitions:
-                self._apply_card_border(self._severity_color(worst_percent))
 
             logger.debug("DiskWidget updated: %d partitions", len(metrics.partitions))
 
@@ -305,7 +285,15 @@ class DiskWidget(BaseWidget):
         """
         mini_card = QFrame()
         mini_card.setFixedSize(CARD_WIDTH, CARD_HEIGHT)
-        self._apply_mini_card_border(mini_card, CARD_BORDER_COLOR)
+        mini_card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_INNER_BACKGROUND};
+                border: none;
+                border-radius: 10px;
+            }}
+        """
+        )
 
         mini_layout = QVBoxLayout()
         mini_layout.setContentsMargins(8, 6, 8, 6)
@@ -352,32 +340,10 @@ class DiskWidget(BaseWidget):
         self.grid_layout.addWidget(mini_card, row, col)
 
         self.partition_cards[device] = {
-            "mini_card": mini_card,
             "percent_label": percent_label,
             "bar": bar,
             "info_label": info_label,
         }
-
-    def _apply_mini_card_border(self, mini_card: QFrame, border_color: str) -> None:
-        """
-        (Re)apply a mini-card's stylesheet with the given border color.
-
-        Kept separate from the outer card's border method so each
-        partition's mini-card can tint to its own severity independently.
-
-        Args:
-            mini_card: The QFrame to style.
-            border_color: Hex color string for the mini-card's border.
-        """
-        mini_card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {CARD_INNER_BACKGROUND};
-                border: 1px solid {border_color};
-                border-radius: 10px;
-            }}
-        """
-        )
 
     def _update_partition_card(self, partition) -> None:
         """
@@ -398,7 +364,6 @@ class DiskWidget(BaseWidget):
         color = self._severity_color(partition.percent)
         widgets["percent_label"].setStyleSheet(f"color: {color}; border: none;")
         self._style_pill_bar(widgets["bar"], color)
-        self._apply_mini_card_border(widgets["mini_card"], color)
 
     def _style_pill_bar(self, bar: QProgressBar, color: str) -> None:
         """
@@ -412,7 +377,7 @@ class DiskWidget(BaseWidget):
             f"""
             QProgressBar {{
                 background-color: {CARD_BACKGROUND_COLOR};
-                border: 1px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 5px;
             }}
             QProgressBar::chunk {{
