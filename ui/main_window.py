@@ -15,9 +15,10 @@ Layout design:
     with generous margins providing breathing room instead of a boxed
     "panel within a panel" look. Tabs use an underline style (no filled
     background) to keep navigation lightweight, styled in the same
-    pixel font used across all the metric cards.
+    pixel font used across all the metric cards, each with a small
+    matching icon (dashboard/process/storage).
 
-    A static pixel-art image sits beside the CPU widget (outside its
+    An animated pixel-art GIF sits beside the CPU widget (outside its
     card border), aligned with the card on the dashboard.
 """
 
@@ -35,7 +36,7 @@ from PyQt6.QtWidgets import (
     QLabel,
 )
 from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QIcon, QMovie
 
 from core.worker_thread import WorkerThread
 from ui.widgets.placeholder_widget import PlaceholderWidget
@@ -65,9 +66,15 @@ CARD_SPACING = 24
 # Padding around the scrollable dashboard content itself
 DASHBOARD_MARGIN = 4
 
-# Static decorative image placed beside the CPU widget (outside its card border)
-MAIN_ICON_PATH = os.path.join("assets", "icons", "main_icon.png")
-MAIN_ICON_SIZE = QSize(175, 112)  # same footprint as the previous GIF
+# Tab bar icons (one per top-level tab)
+DASHBOARD_ICON_PATH = os.path.join("assets", "icons", "dashboard_icon.png")
+PROCESS_ICON_PATH = os.path.join("assets", "icons", "process_icon.png")
+STORAGE_ICON_PATH = os.path.join("assets", "icons", "storage_icon.png")
+TAB_ICON_SIZE = QSize(18, 18)
+
+# Animated decorative GIF placed beside the CPU widget (outside its card border)
+MAIN_ICON_PATH = os.path.join("assets", "icons", "main_icon.gif")
+MAIN_ICON_SIZE = QSize(175, 112)  # same footprint as the previous static image
 
 # Horizontal gap between the CPU widget and its adjacent image
 CPU_ROW_SPACING = 20
@@ -88,6 +95,7 @@ class MainWindow(QMainWindow):
         disk_widget (DiskWidget): Displays disk partition usage.
         process_widget (ProcessWidget): Displays top 10 processes by memory.
         system_widget (SystemWidget): Displays system overview info.
+        main_icon_movie (QMovie): Animated GIF played beside the CPU widget.
     """
 
     def __init__(self) -> None:
@@ -99,6 +107,7 @@ class MainWindow(QMainWindow):
         self.worker: Optional[WorkerThread] = None
         self.update_timer = QTimer()
         self._pixel_font = get_pixel_font_family()
+        self.main_icon_movie: Optional[QMovie] = None
 
         self._setup_ui()
         self._start_worker()
@@ -115,7 +124,7 @@ class MainWindow(QMainWindow):
               └─ central_widget (flat background, provides the outer margin)
                    └─ QTabWidget (underline-style tabs, pixel font, no filled panel)
                         └─ dashboard_content (cards with generous gaps)
-                             └─ cpu_row (CPU widget + decorative image, side by side)
+                             └─ cpu_row (CPU widget + animated GIF, side by side)
         """
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -130,6 +139,7 @@ class MainWindow(QMainWindow):
         # --- TABS ---
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.tabs.setIconSize(TAB_ICON_SIZE)
 
         # --- DASHBOARD TAB (scrollable container for overview widgets) ---
         dashboard_content = QWidget()
@@ -146,7 +156,7 @@ class MainWindow(QMainWindow):
         self.disk_widget = DiskWidget()
         self.system_widget = SystemWidget()
 
-        # --- CPU ROW: CPU widget + decorative image side by side ---
+        # --- CPU ROW: CPU widget + animated GIF side by side ---
         cpu_row_layout = QHBoxLayout()
         cpu_row_layout.setSpacing(CPU_ROW_SPACING)
         cpu_row_layout.addWidget(self.cpu_widget, stretch=1)
@@ -162,17 +172,13 @@ class MainWindow(QMainWindow):
         icon_label.setStyleSheet("border: none;")
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        main_icon_pixmap = QPixmap(MAIN_ICON_PATH)
-        if not main_icon_pixmap.isNull():
-            icon_label.setPixmap(
-                main_icon_pixmap.scaled(
-                    MAIN_ICON_SIZE,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.FastTransformation,
-                )
-            )
+        self.main_icon_movie = QMovie(MAIN_ICON_PATH)
+        if self.main_icon_movie.isValid():
+            self.main_icon_movie.setScaledSize(MAIN_ICON_SIZE)
+            icon_label.setMovie(self.main_icon_movie)
+            self.main_icon_movie.start()
         else:
-            logger.warning("Main icon not found at '%s'", MAIN_ICON_PATH)
+            logger.warning("Main icon GIF not found or invalid at '%s'", MAIN_ICON_PATH)
 
         icon_caption_label = QLabel("Your current PC operations")
         icon_caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -217,9 +223,9 @@ class MainWindow(QMainWindow):
         # --- STORAGE TAB ---
         self.tab_storage = StorageWidget()
 
-        self.tabs.addTab(dashboard_scroll, "Dashboard")
-        self.tabs.addTab(processes_content, "Processes")
-        self.tabs.addTab(self.tab_storage, "Storage")
+        self.tabs.addTab(dashboard_scroll, QIcon(DASHBOARD_ICON_PATH), "Dashboard")
+        self.tabs.addTab(processes_content, QIcon(PROCESS_ICON_PATH), "Processes")
+        self.tabs.addTab(self.tab_storage, QIcon(STORAGE_ICON_PATH), "Storage")
 
         central_layout.addWidget(self.tabs)
 
@@ -302,6 +308,9 @@ class MainWindow(QMainWindow):
             event: Qt close event object.
         """
         logger.info("Closing MainWindow...")
+
+        if self.main_icon_movie is not None:
+            self.main_icon_movie.stop()
 
         if self.worker:
             self.worker.stop()

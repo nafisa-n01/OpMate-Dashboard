@@ -13,10 +13,16 @@ Features:
     - Swap row only appears if swap is actually configured
     - Color-coded by load (green/yellow/red)
     - 4 pixel-art screw icons pinned to the card's corners
+    - Soft drop shadow behind the card for subtle depth
+    - Thin accent-colored underline beneath the title text
+    - Card border tints toward the current severity color (green →
+      yellow → red) as RAM usage rises — purely visual, reuses the
+      existing severity thresholds already driving the bar/labels
 
 Design (matches RAM usage reference image):
     ┌─────────────────────────────────────┐
     │ [icon] RAM USAGE                     │
+    │ ▔▔▔▔▔▔▔▔▔ (underline accent)         │
     │        7.2 GB / 7.7 GB (93.5%)       │
     │  ┌─────────────────────────────────┐│
     │  │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░│ │
@@ -36,9 +42,10 @@ from PyQt6.QtWidgets import (
     QLabel,
     QProgressBar,
     QFrame,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QFont, QPixmap, QColor
 
 from core.data_models import MemoryMetrics
 from ui.widgets.base_widget import BaseWidget
@@ -59,9 +66,23 @@ ACCENT_COLOR = "#88ff88"  # Green, RAM's accent color
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
 SCREW_MARGIN = 4  # px from each edge of the card
 
-# Title icon
+# Title icon + text
 MEMORY_ICON_PATH = os.path.join("assets", "icons", "memory_icon.png")
-TITLE_ICON_HEIGHT = 22  # px, scaled to fit next to the title text
+TITLE_ICON_HEIGHT = 26  # was 22 — small bump, matches CPU/Disk widgets' delta
+TITLE_FONT_SIZE = 12  # was 11 — nudged up to balance the bigger icon
+
+# Title underline accent (thin colored bar under the title text)
+UNDERLINE_HEIGHT = 2
+UNDERLINE_WIDTH = 90  # px — roughly matches "RAM USAGE" text width
+
+# Drop shadow (soft, subtle — depth without breaking the flat/minimal look)
+SHADOW_BLUR_RADIUS = 24
+SHADOW_OFFSET_Y = 6
+SHADOW_COLOR = QColor(0, 0, 0, 160)  # semi-transparent black
+
+# Severity-tinted border: same thresholds/colors as the rest of the card
+# (bar, footer text), applied to the card's own border.
+BORDER_SEVERITY_COLORS = ("#88ff88", "#ffff88", "#ff8888")  # <60 / <80 / >=80
 
 
 class _CardFrame(QFrame):
@@ -112,6 +133,8 @@ class MemoryWidget(BaseWidget):
     Widget displaying real-time memory usage metrics, styled as a compact card.
 
     Attributes:
+        card (_CardFrame): The outer card frame — kept as an attribute so
+            its border color can be re-styled as severity changes.
         overall_label (QLabel): Shows "7.2 GB / 7.7 GB (93.5%)"
         ram_bar (QProgressBar): Padded, pill-shaped bar for RAM usage
         used_label (QLabel): Footer left — "Used: 7.2 GB"
@@ -136,26 +159,27 @@ class MemoryWidget(BaseWidget):
 
         # --- CARD CONTAINER ---
         screw_pixmap = QPixmap(SCREW_ICON_PATH)
-        card = _CardFrame(screw_pixmap)
-        card.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {CARD_BACKGROUND_COLOR};
-                border: 2px solid {CARD_BORDER_COLOR};
-                border-radius: 14px;
-            }}
-        """
-        )
+        self.card = _CardFrame(screw_pixmap)
+        self._apply_card_border(CARD_BORDER_COLOR)
+
+        # Soft drop shadow behind the card. Applied to the card itself
+        # (not the outer widget) so it reads as the card's own depth.
+        shadow = QGraphicsDropShadowEffect(self.card)
+        shadow.setBlurRadius(SHADOW_BLUR_RADIUS)
+        shadow.setOffset(0, SHADOW_OFFSET_Y)
+        shadow.setColor(SHADOW_COLOR)
+        self.card.setGraphicsEffect(shadow)
+
         card_layout = QVBoxLayout()
         card_layout.setContentsMargins(20, 14, 20, 14)
         card_layout.setSpacing(8)
-        card.setLayout(card_layout)
+        self.card.setLayout(card_layout)
 
-        outer_layout.addWidget(card)
+        outer_layout.addWidget(self.card)
 
         # --- TITLE ROW (icon + text) ---
         title_layout = QHBoxLayout()
-        title_layout.setSpacing(8)
+        title_layout.setSpacing(10)  # was 8 — slightly more room next to the bigger icon
 
         memory_icon_pixmap = QPixmap(MEMORY_ICON_PATH)
         if not memory_icon_pixmap.isNull():
@@ -171,13 +195,24 @@ class MemoryWidget(BaseWidget):
             logger.warning("Memory icon not loaded from '%s'", MEMORY_ICON_PATH)
 
         title = QLabel("RAM USAGE")
-        title.setFont(QFont(self._pixel_font, 11))
+        title.setFont(QFont(self._pixel_font, TITLE_FONT_SIZE))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         title_layout.addWidget(title)
 
         title_layout.addStretch()
 
         card_layout.addLayout(title_layout)
+
+        # --- TITLE UNDERLINE ACCENT ---
+        underline = QFrame()
+        underline.setFixedHeight(UNDERLINE_HEIGHT)
+        underline.setFixedWidth(UNDERLINE_WIDTH)
+        underline.setStyleSheet(f"background-color: {ACCENT_COLOR}; border: none;")
+        underline_row = QHBoxLayout()
+        underline_row.setContentsMargins(0, 0, 0, 0)
+        underline_row.addWidget(underline)
+        underline_row.addStretch()
+        card_layout.addLayout(underline_row)
 
         # --- STAT LINE (e.g. "7.2 GB / 7.7 GB (93.5%)") ---
         self.overall_label = QLabel("0 GB / 0 GB (0%)")
@@ -243,6 +278,27 @@ class MemoryWidget(BaseWidget):
 
         card_layout.addLayout(self.swap_row)
 
+    def _apply_card_border(self, border_color: str) -> None:
+        """
+        (Re)apply the card's stylesheet with the given border color.
+
+        Kept as its own method so update_data() can retint the border
+        toward the current severity color without touching anything
+        else about the card's styling.
+
+        Args:
+            border_color: Hex color string for the card's border.
+        """
+        self.card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_BACKGROUND_COLOR};
+                border: 2px solid {border_color};
+                border-radius: 14px;
+            }}
+        """
+        )
+
     def _style_pill_bar(self, bar: QProgressBar, color: str) -> None:
         """
         Apply the padded, pill-shaped bar style seen in the reference image.
@@ -292,6 +348,10 @@ class MemoryWidget(BaseWidget):
                 self.ram_bar, self._severity_color(metrics.ram_percent)
             )
 
+            # Retint the card border toward the current severity color —
+            # purely visual, reuses the same thresholds as everything else.
+            self._apply_card_border(self._severity_color(metrics.ram_percent))
+
             self.used_label.setText(f"Used: {ram_used_gb:.1f} GB")
             self.available_label.setText(f"Available: {ram_available_gb:.1f} GB")
 
@@ -340,8 +400,8 @@ class MemoryWidget(BaseWidget):
             str: Hex color code.
         """
         if percent < 60:
-            return "#88ff88"
+            return BORDER_SEVERITY_COLORS[0]
         elif percent < 80:
-            return "#ffff88"
+            return BORDER_SEVERITY_COLORS[1]
         else:
-            return "#ff8888"
+            return BORDER_SEVERITY_COLORS[2]

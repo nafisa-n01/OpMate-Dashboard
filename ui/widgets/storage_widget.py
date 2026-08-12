@@ -1,46 +1,69 @@
 r"""
 ui/widgets/storage_widget.py
 ------------------------------
-Storage Analyzer widget: lets the user pick a folder, scan it, and
-drill down through subfolders to see what's taking up space.
+Storage Analyzer widget: pick a disk, see its top space-consuming
+folders bucketed into 4 tiers, and drill down through subfolders.
+A 180x180 companion GIF reacts to whatever disk or folder the user is
+currently hovering, giving an at-a-glance read on severity.
 
 Design:
     ┌───────────────────────────────────────────────────┐
     │ STORAGE ANALYZER                                    │
-    │  Path: C:\Users\you           [Back] [Rescan] [Scan]│
+    │  ┌── Disk Picker (default view) ─────────────────┐ │
+    │  │  C:\   [████░░░░░░]     412 GB / 512 GB  Clean │ │
+    │  │  D:\   [█░░░░░░░░░]      88 GB / 1 TB    Safe  │ │
+    │  └──────────────────────────────────────────────────┘
+    │        -- or, after picking a disk --                │
+    │  Path: C:\Users\you      [Disks] [Back] [Rescan]     │
     │  ┌─────────────────────────────────────────────────┐│
-    │  │ Documents        2.3 GB   [████████░░] 46%      ││
-    │  │ Downloads        1.1 GB   [████░░░░░░] 22%      ││
-    │  │ Pictures         0.4 GB   [██░░░░░░░░]  8%      ││
+    │  │ Documents  [████░░░░░░]   2.3 GB  46%  Clean Up ││
+    │  │ Downloads  [██░░░░░░░░]   1.1 GB  22%  Watch    ││
     │  │ ...                                              ││
     │  └─────────────────────────────────────────────────┘│
+    │              [ 180x180 companion GIF ]                │
     └───────────────────────────────────────────────────┘
 
 Navigation:
-    Clicking a folder row drills into it: if that folder was already
-    scanned (has children populated from the parent scan's depth
-    limit), we just display its children. If not yet scanned (a
-    "placeholder" node from hitting MAX_SCAN_DEPTH), a fresh
-    StorageScanThread scans it on demand before showing its contents.
-    "Back" pops the navigation stack to return to the parent folder.
+    Disk picker is the entry point. Picking a disk starts a scan
+    rooted at that disk and switches to the folder list view.
+    Clicking a folder row drills into it (scanning on demand if it's
+    a depth-limit placeholder); "Back" returns to the parent folder;
+    "Disks" returns all the way out to the disk picker.
+
+Companion animation:
+    Hovering a disk card or a folder row swaps the companion QMovie
+    to that item's tier GIF; moving the mouse away reverts to the
+    idle GIF. This is pure UI reaction — no extra scanning happens
+    on hover, so it costs nothing beyond a QMovie swap.
+
+Row layout:
+    Bars are intentionally short and fixed-width (BAR_WIDTH) rather
+    than stretching to fill the row — a full-width bar per row reads
+    as noisy/loud, and a short, consistent bar length keeps the list
+    calm and comparable at a glance. A flexible spacer pushes the
+    size/percent/tier text group flush to the right; those labels are
+    NOT fixed-width (only a minimum), so long values are never clipped.
 """
 
 import logging
 import os
+import shutil
 from typing import Dict, List, Optional
 
+import psutil
 from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QWidget,
     QFrame,
     QProgressBar,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QFont, QMovie
 
 from core.storage.models import DirectoryNode
 from core.storage_worker_thread import StorageScanThread
@@ -54,11 +77,38 @@ logger = logging.getLogger(__name__)
 # stopping — matches analyzer.py's MAX_SCAN_DEPTH default.
 SCAN_DEPTH = 2
 
+# Only the top N folders (by size, already sorted) are rendered per
+# level — keeps row-building cheap even in folders with hundreds of
+# subfolders.
+MAX_DISPLAYED_ROWS = 15
+
 # Card color palette (shared visual language with CPU/RAM/Disk widgets)
 CARD_BORDER_COLOR = "#6a6a9a"
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 CARD_INNER_BACKGROUND = "#2a2a44"
 ACCENT_COLOR = "#ffcc66"  # Amber/gold, Storage's accent color
+
+# --- Tier system ---
+# Percent-of-parent thresholds that separate the 4 tiers. A folder
+# using less than TIER_THRESHOLDS[0]% of its parent's total is Tier 0
+# (Safe); at or above TIER_THRESHOLDS[-1]% it's Tier 3 (Clean Up).
+TIER_THRESHOLDS = (15, 40, 70)
+TIER_LABELS = ("Safe", "Watch", "Consider", "Clean Up")
+TIER_COLORS = ("#88ff88", "#ffff88", "#ffaa66", "#ff8888")
+
+# --- Row layout constants ---
+# Fixed bar width keeps every bar the same short, calm length instead
+# of stretching to fill the row — a deliberately minimalist choice.
+BAR_WIDTH = 220
+BAR_HEIGHT = 12
+ROW_SPACING = 14
+ROW_CONTENT_MARGINS = (14, 9, 18, 9)  # left, top, right, bottom
+
+# --- Companion GIF assets ---
+GIF_DIR = os.path.join("assets", "gifs")
+TIER_GIF_FILENAMES = ("tier00.gif", "tier01.gif", "tier02.gif", "tier03.gif")
+IDLE_GIF_FILENAME = "notier.gif"
+COMPANION_SIZE = QSize(180, 180)
 
 BUTTON_STYLE = f"""
     QPushButton {{
@@ -79,12 +129,17 @@ BUTTON_STYLE = f"""
 
 class StorageWidget(BaseWidget):
     """
-    Widget for browsing folder sizes with drill-down navigation.
+    Widget for browsing folder sizes with a disk picker entry point,
+    4-tier severity classification, and drill-down navigation.
 
     Attributes:
         nav_stack (List[DirectoryNode]): Folders visited, root to
             current — nav_stack[-1] is the currently displayed folder.
-            Used to support the "Back" button.
+            Used to support the "Back" button. Empty while the disk
+            picker is showing.
+        current_disk_path (Optional[str]): Mount point / drive root of
+            the disk currently being browsed, or None if still on the
+            disk picker.
         current_thread (Optional[StorageScanThread]): The in-flight
             scan thread, if any. Kept referenced so Qt doesn't garbage
             collect it mid-scan, and to avoid starting a second scan
@@ -96,13 +151,21 @@ class StorageWidget(BaseWidget):
         super().__init__("Storage Analyzer")
         self._pixel_font = get_pixel_font_family()
         self.nav_stack: List[DirectoryNode] = []
+        self.current_disk_path: Optional[str] = None
         self.current_thread: Optional[StorageScanThread] = None
         self._row_widgets: Dict[str, dict] = {}
+        self._companion_movies: Dict[str, QMovie] = {}
         self._setup_ui()
+        self._load_companion_movies()
+        self._populate_disk_picker()
         logger.debug("StorageWidget initialized")
 
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
     def _setup_ui(self) -> None:
-        """Build the card-style UI layout."""
+        """Build the card-style UI layout: title, stacked views, companion."""
         outer_layout = QVBoxLayout()
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(outer_layout)
@@ -131,14 +194,89 @@ class StorageWidget(BaseWidget):
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         card_layout.addWidget(title)
 
+        # --- STATUS LABEL (shows "Scanning..." / error messages) ---
+        self.status_label = QLabel("")
+        self.status_label.setFont(QFont(self._pixel_font, 7))
+        self.status_label.setStyleSheet("color: #ffcc66; border: none;")
+        self.status_label.hide()
+        card_layout.addWidget(self.status_label)
+
+        # --- STACKED VIEWS: disk picker (0) / folder list (1) ---
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._build_disk_picker_page())
+        self.stack.addWidget(self._build_folder_list_page())
+        card_layout.addWidget(self.stack)
+
+        # --- COMPANION GIF ---
+        # No border/frame of its own — it shares the card's background
+        # directly so there's no visible seam between the list above
+        # and the companion below, just generous top spacing.
+        card_layout.addWidget(self._build_companion_area())
+
+    def _build_disk_picker_page(self) -> QWidget:
+        """Build the disk-picker view (shown on load / via "Disks" button)."""
+        page = QWidget()
+        page_layout = QVBoxLayout()
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(8)
+        page.setLayout(page_layout)
+
+        hint_label = QLabel("Select a disk to scan:")
+        hint_label.setFont(QFont(self._pixel_font, 7))
+        hint_label.setStyleSheet("color: #aaaaaa; border: none;")
+        page_layout.addWidget(hint_label)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMinimumHeight(320)
+        # No border here — a hard-edged box directly above the
+        # companion GIF read as an ugly seam. Background contrast
+        # alone is enough to separate it from the card behind it.
+        scroll_area.setStyleSheet(
+            f"""
+            QScrollArea {{
+                background-color: {CARD_INNER_BACKGROUND};
+                border: none;
+                border-radius: 8px;
+            }}
+        """
+        )
+
+        disk_list_container = QWidget()
+        disk_list_container.setStyleSheet("background-color: transparent;")
+        self.disk_list_layout = QVBoxLayout()
+        self.disk_list_layout.setSpacing(6)
+        self.disk_list_layout.setContentsMargins(10, 10, 10, 10)
+        self.disk_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        disk_list_container.setLayout(self.disk_list_layout)
+
+        scroll_area.setWidget(disk_list_container)
+        page_layout.addWidget(scroll_area)
+
+        return page
+
+    def _build_folder_list_page(self) -> QWidget:
+        """Build the folder-list view (shown after a disk is picked)."""
+        page = QWidget()
+        page_layout = QVBoxLayout()
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(10)
+        page.setLayout(page_layout)
+
         # --- PATH + CONTROLS ROW ---
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(8)
 
-        self.path_label = QLabel("No folder scanned yet")
+        self.path_label = QLabel("")
         self.path_label.setFont(QFont(self._pixel_font, 7))
         self.path_label.setStyleSheet("color: #aaaaaa; border: none;")
         controls_layout.addWidget(self.path_label, stretch=1)
+
+        self.disks_button = QPushButton("Disks")
+        self.disks_button.setFont(QFont(self._pixel_font, 7))
+        self.disks_button.setStyleSheet(BUTTON_STYLE)
+        self.disks_button.clicked.connect(self._show_disk_picker)
+        controls_layout.addWidget(self.disks_button)
 
         self.back_button = QPushButton("Back")
         self.back_button.setFont(QFont(self._pixel_font, 7))
@@ -154,59 +292,258 @@ class StorageWidget(BaseWidget):
         self.rescan_button.clicked.connect(self._rescan_current)
         controls_layout.addWidget(self.rescan_button)
 
-        self.scan_button = QPushButton("Scan Home Folder")
-        self.scan_button.setFont(QFont(self._pixel_font, 7))
-        self.scan_button.setStyleSheet(BUTTON_STYLE)
-        self.scan_button.clicked.connect(self._start_initial_scan)
-        controls_layout.addWidget(self.scan_button)
-
-        card_layout.addLayout(controls_layout)
-
-        # --- STATUS LABEL (shows "Scanning..." / error messages) ---
-        self.status_label = QLabel("")
-        self.status_label.setFont(QFont(self._pixel_font, 7))
-        self.status_label.setStyleSheet("color: #ffcc66; border: none;")
-        self.status_label.hide()
-        card_layout.addWidget(self.status_label)
+        page_layout.addLayout(controls_layout)
 
         # --- SCROLLABLE FOLDER LIST ---
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setMinimumHeight(320)
+        scroll_area.setMinimumHeight(280)
         scroll_area.setStyleSheet(
             f"""
             QScrollArea {{
                 background-color: {CARD_INNER_BACKGROUND};
-                border: 1px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 8px;
             }}
         """
         )
 
         list_container = QWidget()
+        list_container.setStyleSheet("background-color: transparent;")
         self.list_layout = QVBoxLayout()
         self.list_layout.setSpacing(6)
         self.list_layout.setContentsMargins(10, 10, 10, 10)
         self.list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         list_container.setLayout(self.list_layout)
 
-        self.empty_label = QLabel("Click 'Scan Home Folder' to begin.")
-        self.empty_label.setFont(QFont(self._pixel_font, 7))
-        self.empty_label.setStyleSheet("color: #888888; border: none;")
-        self.list_layout.addWidget(self.empty_label)
-
         scroll_area.setWidget(list_container)
-        card_layout.addWidget(scroll_area)
+        page_layout.addWidget(scroll_area)
+
+        return page
+
+    def _build_companion_area(self) -> QWidget:
+        """Build the centered companion GIF area at the bottom of the card."""
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background-color: transparent;")
+        wrapper_layout = QHBoxLayout()
+        # Generous top margin so the companion clearly reads as its
+        # own relaxed zone rather than butting against the list above.
+        wrapper_layout.setContentsMargins(0, 18, 0, 4)
+        wrapper.setLayout(wrapper_layout)
+
+        self.companion_label = QLabel()
+        self.companion_label.setFixedSize(COMPANION_SIZE)
+        # Background matches the card exactly. If a GIF's own frames
+        # aren't transparent, this keeps any visible edge blending
+        # into the card instead of contrasting against it.
+        self.companion_label.setStyleSheet(
+            f"background-color: {CARD_BACKGROUND_COLOR}; border: none;"
+        )
+        self.companion_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        wrapper_layout.addStretch(1)
+        wrapper_layout.addWidget(self.companion_label)
+        wrapper_layout.addStretch(1)
+
+        return wrapper
+
+    # ------------------------------------------------------------------
+    # Companion GIF handling
+    # ------------------------------------------------------------------
+
+    def _load_companion_movies(self) -> None:
+        """
+        Preload all companion QMovies (idle + 4 tiers) once at startup,
+        so hover events only need to swap an already-loaded QMovie
+        rather than re-reading from disk each time.
+        """
+        gif_files = {"idle": IDLE_GIF_FILENAME}
+        for tier_index, filename in enumerate(TIER_GIF_FILENAMES):
+            gif_files[f"tier{tier_index}"] = filename
+
+        for key, filename in gif_files.items():
+            path = os.path.join(GIF_DIR, filename)
+            movie = QMovie(path)
+            if not movie.isValid():
+                logger.warning("Companion GIF not found or invalid: '%s'", path)
+            movie.setScaledSize(COMPANION_SIZE)
+            self._companion_movies[key] = movie
+
+        self._show_companion("idle")
+
+    def _show_companion(self, key: str) -> None:
+        """
+        Swap the companion label to the given preloaded movie and play
+        it. Falls back silently if the movie failed to load.
+
+        Args:
+            key: "idle" or "tier0".."tier3".
+        """
+        movie = self._companion_movies.get(key)
+        if movie is None or not movie.isValid():
+            return
+
+        current = self.companion_label.movie()
+        if current is not None and current is not movie:
+            current.stop()
+
+        self.companion_label.setMovie(movie)
+        movie.start()
+
+    def _attach_hover_companion(self, widget: QWidget, tier_index: int) -> None:
+        """
+        Wire a row/card widget's hover events to swap the companion GIF
+        to the given tier while hovered, and back to idle on leave.
+
+        Args:
+            widget: The QFrame (disk card or folder row) to attach to.
+            tier_index: 0-3, indexing into TIER_LABELS / companion movies.
+        """
+        widget.enterEvent = lambda event, t=tier_index: self._show_companion(f"tier{t}")
+        widget.leaveEvent = lambda event: self._show_companion("idle")
+
+    # ------------------------------------------------------------------
+    # Tier helpers
+    # ------------------------------------------------------------------
+
+    def _tier_index_for_percent(self, percent: float) -> int:
+        """Map a percent-of-parent value to a tier index 0-3."""
+        if percent < TIER_THRESHOLDS[0]:
+            return 0
+        elif percent < TIER_THRESHOLDS[1]:
+            return 1
+        elif percent < TIER_THRESHOLDS[2]:
+            return 2
+        else:
+            return 3
+
+    # ------------------------------------------------------------------
+    # Disk picker
+    # ------------------------------------------------------------------
+
+    def _populate_disk_picker(self) -> None:
+        """Detect available disks/partitions and build a card for each."""
+        # Clear any existing cards (supports being called again later)
+        while self.disk_list_layout.count():
+            item = self.disk_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        try:
+            partitions = psutil.disk_partitions(all=False)
+        except Exception as e:
+            logger.error("Failed to enumerate disks: %s", e)
+            partitions = []
+
+        if not partitions:
+            empty_label = QLabel("No disks detected.")
+            empty_label.setFont(QFont(self._pixel_font, 7))
+            empty_label.setStyleSheet("color: #888888; border: none;")
+            self.disk_list_layout.addWidget(empty_label)
+            return
+
+        for partition in partitions:
+            try:
+                usage = shutil.disk_usage(partition.mountpoint)
+            except OSError as e:
+                # Unreadable/empty removable drives, etc. — skip rather
+                # than crash the whole picker.
+                logger.debug("Skipping disk %s: %s", partition.mountpoint, e)
+                continue
+
+            card = self._create_disk_card(partition.mountpoint, usage)
+            self.disk_list_layout.addWidget(card)
+
+    def _create_disk_card(self, mount_point: str, usage) -> QFrame:
+        """
+        Build one clickable card representing a disk.
+
+        Args:
+            mount_point: The disk's mount point / drive root (e.g. "C:\\").
+            usage: Result of shutil.disk_usage() — has .total/.used/.free.
+
+        Returns:
+            QFrame: The completed card, ready to add to the disk list.
+        """
+        percent_used = (usage.used / usage.total * 100.0) if usage.total else 0.0
+        tier_index = self._tier_index_for_percent(percent_used)
+
+        card = QFrame()
+        card.setCursor(Qt.CursorShape.PointingHandCursor)
+        card.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {CARD_BACKGROUND_COLOR};
+                border: 1px solid {CARD_BORDER_COLOR};
+                border-radius: 8px;
+            }}
+            QFrame:hover {{
+                background-color: #4a4a6c;
+            }}
+        """
+        )
+
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(*ROW_CONTENT_MARGINS)
+        row_layout.setSpacing(ROW_SPACING)
+        card.setLayout(row_layout)
+
+        name_label = QLabel(mount_point)
+        name_label.setFont(QFont(self._pixel_font, 8))
+        name_label.setStyleSheet("color: #ffffff; border: none;")
+        name_label.setFixedWidth(70)
+        row_layout.addWidget(name_label)
+
+        bar = QProgressBar()
+        bar.setMaximum(100)
+        bar.setValue(int(percent_used))
+        bar.setTextVisible(False)
+        bar.setFixedHeight(BAR_HEIGHT)
+        bar.setFixedWidth(BAR_WIDTH)
+        self._style_pill_bar(bar, TIER_COLORS[tier_index])
+        row_layout.addWidget(bar)
+
+        # Pushes the text group flush right, independent of bar length.
+        row_layout.addStretch(1)
+
+        usage_label = QLabel(
+            f"{self._format_size(usage.used)} / {self._format_size(usage.total)}"
+        )
+        usage_label.setFont(QFont(self._pixel_font, 7))
+        usage_label.setStyleSheet("color: #cccccc; border: none;")
+        usage_label.setMinimumWidth(150)
+        usage_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        row_layout.addWidget(usage_label)
+
+        tier_label = QLabel(TIER_LABELS[tier_index])
+        tier_label.setFont(QFont(self._pixel_font, 7))
+        tier_label.setStyleSheet(f"color: {TIER_COLORS[tier_index]}; border: none;")
+        tier_label.setMinimumWidth(75)
+        tier_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        row_layout.addWidget(tier_label)
+
+        card.mousePressEvent = lambda event, p=mount_point: self._select_disk(p)
+        self._attach_hover_companion(card, tier_index)
+
+        return card
+
+    def _select_disk(self, mount_point: str) -> None:
+        """Handle a disk being picked: switch views and start scanning it."""
+        self.current_disk_path = mount_point
+        self.nav_stack = []
+        self.stack.setCurrentIndex(1)
+        self._run_scan(mount_point)
+
+    def _show_disk_picker(self) -> None:
+        """Return to the disk picker view."""
+        self.current_disk_path = None
+        self.nav_stack = []
+        self.stack.setCurrentIndex(0)
 
     # ------------------------------------------------------------------
     # Scan triggering
     # ------------------------------------------------------------------
-
-    def _start_initial_scan(self) -> None:
-        """Start a fresh scan rooted at the user's home folder."""
-        home_path = os.path.expanduser("~")
-        self.nav_stack = []
-        self._run_scan(home_path)
 
     def _rescan_current(self) -> None:
         """Re-scan the folder currently being viewed."""
@@ -250,7 +587,7 @@ class StorageWidget(BaseWidget):
             replace_top: If True, the scan result replaces the current
                 top of nav_stack in place (used for drill-down and
                 rescan); if False, this is treated as a brand-new root
-                scan (used for the initial "Scan Home Folder" click).
+                scan (used when a disk is first picked).
         """
         if self.current_thread is not None and self.current_thread.isRunning():
             logger.debug("Scan already in progress, ignoring new request")
@@ -277,7 +614,7 @@ class StorageWidget(BaseWidget):
             result: The freshly-scanned DirectoryNode tree.
             replace_top: Whether this scan should replace the current
                 top of nav_stack (drill-down/rescan) or become a new
-                root (initial scan).
+                root (initial disk scan).
         """
         self._set_scanning_state(False)
 
@@ -301,9 +638,9 @@ class StorageWidget(BaseWidget):
 
     def _set_scanning_state(self, scanning: bool) -> None:
         """Toggle button states and status text while a scan runs."""
-        self.scan_button.setEnabled(not scanning)
         self.rescan_button.setEnabled(not scanning and len(self.nav_stack) > 0)
         self.back_button.setEnabled(not scanning and len(self.nav_stack) > 1)
+        self.disks_button.setEnabled(not scanning)
 
         if scanning:
             self.status_label.setText("Scanning...")
@@ -341,9 +678,19 @@ class StorageWidget(BaseWidget):
             self.list_layout.addWidget(empty_label)
             return
 
-        for child in current.children:
+        # children are already sorted largest-first by the analyzer
+        displayed = current.children[:MAX_DISPLAYED_ROWS]
+        remaining = len(current.children) - len(displayed)
+
+        for child in displayed:
             row = self._create_folder_row(child)
             self.list_layout.addWidget(row)
+
+        if remaining > 0:
+            more_label = QLabel(f"+ {remaining} more not shown")
+            more_label.setFont(QFont(self._pixel_font, 7))
+            more_label.setStyleSheet("color: #666677; border: none;")
+            self.list_layout.addWidget(more_label)
 
     def _create_folder_row(self, node: DirectoryNode) -> QFrame:
         """
@@ -355,6 +702,9 @@ class StorageWidget(BaseWidget):
         Returns:
             QFrame: The completed row, ready to add to the list layout.
         """
+        percent = node.percent_of_parent()
+        tier_index = self._tier_index_for_percent(percent)
+
         row = QFrame()
         row.setCursor(Qt.CursorShape.PointingHandCursor)
         row.setStyleSheet(
@@ -371,40 +721,52 @@ class StorageWidget(BaseWidget):
         )
 
         row_layout = QHBoxLayout()
-        row_layout.setContentsMargins(12, 8, 12, 8)
-        row_layout.setSpacing(10)
+        row_layout.setContentsMargins(*ROW_CONTENT_MARGINS)
+        row_layout.setSpacing(ROW_SPACING)
         row.setLayout(row_layout)
 
         icon_prefix = "🔒 " if not node.is_accessible else ""
         name_label = QLabel(f"{icon_prefix}{node.name}")
         name_label.setFont(QFont(self._pixel_font, 8))
         name_label.setStyleSheet("color: #ffffff; border: none;")
-        name_label.setFixedWidth(180)
+        name_label.setFixedWidth(150)
         row_layout.addWidget(name_label)
 
         bar = QProgressBar()
         bar.setMaximum(100)
-        bar.setValue(int(node.percent_of_parent()))
+        bar.setValue(int(percent))
         bar.setTextVisible(False)
-        bar.setFixedHeight(14)
-        self._style_pill_bar(bar, self._severity_color(node.percent_of_parent()))
-        row_layout.addWidget(bar, stretch=1)
+        bar.setFixedHeight(BAR_HEIGHT)
+        bar.setFixedWidth(BAR_WIDTH)
+        self._style_pill_bar(bar, TIER_COLORS[tier_index])
+        row_layout.addWidget(bar)
+
+        # Pushes the text group flush right, independent of bar length.
+        row_layout.addStretch(1)
 
         size_label = QLabel(self._format_size(node.size_bytes))
         size_label.setFont(QFont(self._pixel_font, 7))
         size_label.setStyleSheet("color: #cccccc; border: none;")
-        size_label.setFixedWidth(70)
+        size_label.setMinimumWidth(70)
         size_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         row_layout.addWidget(size_label)
 
-        percent_label = QLabel(f"{node.percent_of_parent():.0f}%")
+        percent_label = QLabel(f"{percent:.0f}%")
         percent_label.setFont(QFont(self._pixel_font, 7))
         percent_label.setStyleSheet("color: #cccccc; border: none;")
-        percent_label.setFixedWidth(40)
+        percent_label.setMinimumWidth(45)
         percent_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         row_layout.addWidget(percent_label)
 
+        tier_label = QLabel(TIER_LABELS[tier_index])
+        tier_label.setFont(QFont(self._pixel_font, 7))
+        tier_label.setStyleSheet(f"color: {TIER_COLORS[tier_index]}; border: none;")
+        tier_label.setMinimumWidth(75)
+        tier_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        row_layout.addWidget(tier_label)
+
         row.mousePressEvent = lambda event, n=node: self._drill_into(n)
+        self._attach_hover_companion(row, tier_index)
 
         return row
 
@@ -427,17 +789,6 @@ class StorageWidget(BaseWidget):
             }}
         """
         )
-
-    def _severity_color(self, percent: float) -> str:
-        """Get a color string based on how much of the parent this folder uses."""
-        if percent < 15:
-            return "#88ff88"
-        elif percent < 40:
-            return "#ffff88"
-        elif percent < 70:
-            return "#ffaa66"
-        else:
-            return "#ff8888"
 
     def _format_size(self, size_bytes: int) -> str:
         """Format a byte count as a human-readable string (MB or GB)."""
