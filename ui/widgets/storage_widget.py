@@ -3,24 +3,25 @@ ui/widgets/storage_widget.py
 ------------------------------
 Storage Analyzer widget: pick a disk, see its top space-consuming
 folders bucketed into 4 tiers, and drill down through subfolders.
-A 180x180 companion GIF reacts to whatever disk or folder the user is
+A companion GIF reacts to whatever disk or folder the user is
 currently hovering, giving an at-a-glance read on severity.
 
 Design:
     ┌───────────────────────────────────────────────────┐
-    │ STORAGE ANALYZER                                    │
-    │  ┌── Disk Picker (default view) ─────────────────┐ │
-    │  │  C:\   [████░░░░░░]     412 GB / 512 GB  Clean │ │
-    │  │  D:\   [█░░░░░░░░░]      88 GB / 1 TB    Safe  │ │
-    │  └──────────────────────────────────────────────────┘
-    │        -- or, after picking a disk --                │
-    │  Path: C:\Users\you      [Disks] [Back] [Rescan]     │
-    │  ┌─────────────────────────────────────────────────┐│
-    │  │ Documents  [████░░░░░░]   2.3 GB  46%  Clean Up ││
-    │  │ Downloads  [██░░░░░░░░]   1.1 GB  22%  Watch    ││
-    │  │ ...                                              ││
-    │  └─────────────────────────────────────────────────┘│
-    │              [ 180x180 companion GIF ]                │
+      STORAGE ANALYZER
+      ▔▔▔▔▔▔▔▔▔▔▔▔ (underline accent)
+      ┌── Disk Picker (default view) ─────────────────┐
+      │  C:\   [████░░░░░░]     412 GB / 512 GB  Clean │
+      │  D:\   [█░░░░░░░░░]      88 GB / 1 TB    Safe  │
+      └──────────────────────────────────────────────────┘
+            -- or, after picking a disk --
+      Path: C:\Users\you      [Disks] [Back] [Rescan]
+      ┌─────────────────────────────────────────────────┐
+      │ Documents  [████░░░░░░]   2.3 GB  46%  Clean Up │
+      │ Downloads  [██░░░░░░░░]   1.1 GB  22%  Watch    │
+      │ ...                                              │
+      └─────────────────────────────────────────────────┘
+                [ companion GIF ]
     └───────────────────────────────────────────────────┘
 
 Navigation:
@@ -36,6 +37,11 @@ Companion animation:
     idle GIF. This is pure UI reaction — no extra scanning happens
     on hover, so it costs nothing beyond a QMovie swap.
 
+    COMPANION_SIZE controls the display size. For pixel-art GIFs to
+    stay crisp (not blurry), this should be an exact integer multiple
+    of the GIF's native resolution — e.g. a 80x80 source GIF should
+    display at 160 (2x), 240 (3x), or 320 (4x), not an arbitrary size.
+
 Row layout:
     Bars are intentionally short and fixed-width (BAR_WIDTH) rather
     than stretching to fill the row — a full-width bar per row reads
@@ -43,6 +49,13 @@ Row layout:
     calm and comparable at a glance. A flexible spacer pushes the
     size/percent/tier text group flush to the right; those labels are
     NOT fixed-width (only a minimum), so long values are never clipped.
+
+Visual style:
+    Cards and rows are borderless (background + rounded corners only),
+    matching the rest of the dashboard's flat/minimal look. Buttons
+    keep a thin border, since interactive controls benefit from a
+    visible edge for clickability — that's a functional affordance,
+    not decorative card framing, so it's exempt from the borderless rule.
 """
 
 import logging
@@ -61,9 +74,10 @@ from PyQt6.QtWidgets import (
     QWidget,
     QFrame,
     QProgressBar,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QFont, QMovie
+from PyQt6.QtGui import QFont, QMovie, QColor
 
 from core.storage.models import DirectoryNode
 from core.storage_worker_thread import StorageScanThread
@@ -82,11 +96,25 @@ SCAN_DEPTH = 2
 # subfolders.
 MAX_DISPLAYED_ROWS = 15
 
-# Card color palette (shared visual language with CPU/RAM/Disk widgets)
-CARD_BORDER_COLOR = "#6a6a9a"
+# Card color palette (shared visual language with the rest of the
+# dashboard). No CARD_BORDER_COLOR — cards/rows here are intentionally
+# borderless, matching CPU/RAM/Disk/Health.
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 CARD_INNER_BACKGROUND = "#2a2a44"
-ACCENT_COLOR = "#ffcc66"  # Amber/gold, Storage's accent color
+ACCENT_COLOR = "#D8A0A8"  # Dusty Rose, Storage's accent color
+
+# Border used only for interactive controls (buttons) — a functional
+# affordance, kept separate from the borderless card/row styling above.
+BUTTON_BORDER_COLOR = "#6a6a9a"
+
+# Title underline accent (thin colored bar under the title text)
+UNDERLINE_HEIGHT = 2
+UNDERLINE_WIDTH = 130  # px — roughly matches "STORAGE ANALYZER" text width
+
+# Drop shadow (soft, subtle — matches the rest of the dashboard)
+SHADOW_BLUR_RADIUS = 24
+SHADOW_OFFSET_Y = 6
+SHADOW_COLOR = QColor(0, 0, 0, 160)
 
 # --- Tier system ---
 # Percent-of-parent thresholds that separate the 4 tiers. A folder
@@ -94,7 +122,11 @@ ACCENT_COLOR = "#ffcc66"  # Amber/gold, Storage's accent color
 # (Safe); at or above TIER_THRESHOLDS[-1]% it's Tier 3 (Clean Up).
 TIER_THRESHOLDS = (15, 40, 70)
 TIER_LABELS = ("Safe", "Watch", "Consider", "Clean Up")
-TIER_COLORS = ("#88ff88", "#ffff88", "#ffaa66", "#ff8888")
+# 4-step severity gradient built from the shared dashboard palette:
+# sage (safe) -> muted blue (ok) -> muted amber (consider) -> muted
+# terracotta (clean up). Only 3 tones exist in the shared severity
+# palette, so amber fills the gap as a middle step here.
+TIER_COLORS = ("#8FD6A3", "#82B5D8", "#D6A85F", "#D97A6B")
 
 # --- Row layout constants ---
 # Fixed bar width keeps every bar the same short, calm length instead
@@ -108,13 +140,17 @@ ROW_CONTENT_MARGINS = (14, 9, 18, 9)  # left, top, right, bottom
 GIF_DIR = os.path.join("assets", "gifs")
 TIER_GIF_FILENAMES = ("tier00.gif", "tier01.gif", "tier02.gif", "tier03.gif")
 IDLE_GIF_FILENAME = "notier.gif"
-COMPANION_SIZE = QSize(180, 180)
+# Was 180x180 — bumped up for more visual presence. For crisp pixel
+# art, this should be an exact integer multiple of the GIF's actual
+# source resolution (e.g. 80px source -> 160/240/320 target). Adjust
+# once the source size is confirmed.
+COMPANION_SIZE = QSize(240, 240)
 
 BUTTON_STYLE = f"""
     QPushButton {{
         background-color: {CARD_INNER_BACKGROUND};
         color: #ffffff;
-        border: 1px solid {CARD_BORDER_COLOR};
+        border: 1px solid {BUTTON_BORDER_COLOR};
         border-radius: 6px;
         padding: 6px 14px;
     }}
@@ -133,6 +169,8 @@ class StorageWidget(BaseWidget):
     4-tier severity classification, and drill-down navigation.
 
     Attributes:
+        card (QFrame): The outer card frame. Borderless — only
+            background, rounded corners, and a drop shadow.
         nav_stack (List[DirectoryNode]): Folders visited, root to
             current — nav_stack[-1] is the currently displayed folder.
             Used to support the "Back" button. Empty while the disk
@@ -170,23 +208,32 @@ class StorageWidget(BaseWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(outer_layout)
 
-        # --- CARD CONTAINER ---
-        card = QFrame()
-        card.setStyleSheet(
+        # --- CARD CONTAINER (borderless — background + rounded corners only) ---
+        self.card = QFrame()
+        self.card.setStyleSheet(
             f"""
             QFrame {{
                 background-color: {CARD_BACKGROUND_COLOR};
-                border: 2px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 14px;
             }}
         """
         )
+
+        # Soft drop shadow behind the card, matching the rest of the
+        # dashboard's cards.
+        shadow = QGraphicsDropShadowEffect(self.card)
+        shadow.setBlurRadius(SHADOW_BLUR_RADIUS)
+        shadow.setOffset(0, SHADOW_OFFSET_Y)
+        shadow.setColor(SHADOW_COLOR)
+        self.card.setGraphicsEffect(shadow)
+
         card_layout = QVBoxLayout()
         card_layout.setContentsMargins(20, 16, 20, 16)
         card_layout.setSpacing(10)
-        card.setLayout(card_layout)
+        self.card.setLayout(card_layout)
 
-        outer_layout.addWidget(card)
+        outer_layout.addWidget(self.card)
 
         # --- TITLE ---
         title = QLabel("STORAGE ANALYZER")
@@ -194,10 +241,21 @@ class StorageWidget(BaseWidget):
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         card_layout.addWidget(title)
 
+        # --- TITLE UNDERLINE ACCENT ---
+        underline = QFrame()
+        underline.setFixedHeight(UNDERLINE_HEIGHT)
+        underline.setFixedWidth(UNDERLINE_WIDTH)
+        underline.setStyleSheet(f"background-color: {ACCENT_COLOR}; border: none;")
+        underline_row = QHBoxLayout()
+        underline_row.setContentsMargins(0, 0, 0, 0)
+        underline_row.addWidget(underline)
+        underline_row.addStretch()
+        card_layout.addLayout(underline_row)
+
         # --- STATUS LABEL (shows "Scanning..." / error messages) ---
         self.status_label = QLabel("")
         self.status_label.setFont(QFont(self._pixel_font, 7))
-        self.status_label.setStyleSheet("color: #ffcc66; border: none;")
+        self.status_label.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         self.status_label.hide()
         card_layout.addWidget(self.status_label)
 
@@ -229,9 +287,6 @@ class StorageWidget(BaseWidget):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setMinimumHeight(320)
-        # No border here — a hard-edged box directly above the
-        # companion GIF read as an ugly seam. Background contrast
-        # alone is enough to separate it from the card behind it.
         scroll_area.setStyleSheet(
             f"""
             QScrollArea {{
@@ -474,8 +529,8 @@ class StorageWidget(BaseWidget):
         card.setStyleSheet(
             f"""
             QFrame {{
-                background-color: {CARD_BACKGROUND_COLOR};
-                border: 1px solid {CARD_BORDER_COLOR};
+                background-color: {CARD_INNER_BACKGROUND};
+                border: none;
                 border-radius: 8px;
             }}
             QFrame:hover {{
@@ -710,8 +765,8 @@ class StorageWidget(BaseWidget):
         row.setStyleSheet(
             f"""
             QFrame {{
-                background-color: {CARD_BACKGROUND_COLOR};
-                border: 1px solid {CARD_BORDER_COLOR};
+                background-color: {CARD_INNER_BACKGROUND};
+                border: none;
                 border-radius: 8px;
             }}
             QFrame:hover {{
@@ -779,8 +834,8 @@ class StorageWidget(BaseWidget):
         bar.setStyleSheet(
             f"""
             QProgressBar {{
-                background-color: {CARD_INNER_BACKGROUND};
-                border: 1px solid {CARD_BORDER_COLOR};
+                background-color: {CARD_BACKGROUND_COLOR};
+                border: none;
                 border-radius: 6px;
             }}
             QProgressBar::chunk {{

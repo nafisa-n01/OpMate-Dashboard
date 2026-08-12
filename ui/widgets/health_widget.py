@@ -12,9 +12,12 @@ one of them updates. This keeps it lightweight: no extra polling,
 no extra background thread, just reusing data that's already flowing.
 
 Features:
-    - Card-style container matching MemoryWidget's current look:
-      drop shadow, icon + title, underline accent (no border — kept
-      flat/borderless, distinguishing it visually from the metric cards)
+    - Card-style container matching the rest of the dashboard:
+      drop shadow, borderless background + rounded corners
+    - Icon + title CENTERED (unlike the other widgets' left-aligned
+      title row) — this card is a summary, not a metric card, so its
+      header is treated as more of a standalone banner
+    - Underline accent centered directly beneath the title
     - Big centered status text ("ALL GOOD" / "MINOR ISSUES" / "NEEDS
       ATTENTION")
     - Three small indicator dots (CPU / RAM / Disk), each colored by
@@ -24,8 +27,8 @@ Features:
 
 Design:
     ┌─────────────────────────────────────┐
-      [icon] PC HEALTH
-      ▔▔▔▔▔▔▔▔▔ (underline accent)
+              [icon] PC HEALTH
+            ▔▔▔▔▔▔▔▔▔ (centered underline)
                  ALL GOOD
         ● CPU      ● RAM      ● DISK
        Score: 92/100
@@ -73,7 +76,7 @@ TITLE_FONT_SIZE = 12
 UNDERLINE_HEIGHT = 2
 UNDERLINE_WIDTH = 90  # px — roughly matches "PC HEALTH" text width
 
-# Drop shadow (soft, subtle — matches MemoryWidget)
+# Drop shadow (soft, subtle — matches the rest of the dashboard)
 SHADOW_BLUR_RADIUS = 24
 SHADOW_OFFSET_Y = 6
 SHADOW_COLOR = QColor(0, 0, 0, 160)
@@ -141,13 +144,11 @@ class HealthWidget(BaseWidget):
     Aggregate PC health status widget, combining CPU/RAM/Disk severity.
 
     Attributes:
-        card (_CardFrame): The outer card frame. Unlike the metric cards,
-            this one has no border — only background, rounded corners,
-            and a drop shadow — so no border color needs re-styling as
-            severity changes.
+        card (_CardFrame): The outer card frame. Borderless — only
+            background, rounded corners, and a drop shadow.
         status_label (QLabel): Big centered "ALL GOOD" / etc. text.
         score_label (QLabel): Footer left — "Score: 92/100".
-        tip_label (QLabel): Footer right — short advice text (hidden when empty).
+        tip_label (QLabel): Footer — short advice text (hidden when empty).
         cpu_dot / ram_dot / disk_dot (QLabel): Small colored indicator dots.
         _cpu_percent / _ram_percent / _disk_percent (Optional[float]):
             Latest known value from each source signal. None until that
@@ -200,9 +201,10 @@ class HealthWidget(BaseWidget):
 
         outer_layout.addWidget(self.card)
 
-        # --- TITLE ROW (icon + text) ---
+        # --- TITLE ROW (icon + text, CENTERED — unlike other widgets) ---
         title_layout = QHBoxLayout()
         title_layout.setSpacing(10)
+        title_layout.addStretch()
 
         health_icon_pixmap = QPixmap(HEALTH_ICON_PATH)
         if not health_icon_pixmap.isNull():
@@ -226,13 +228,14 @@ class HealthWidget(BaseWidget):
 
         card_layout.addLayout(title_layout)
 
-        # --- TITLE UNDERLINE ACCENT ---
+        # --- TITLE UNDERLINE ACCENT (centered beneath the title) ---
         self.underline = QFrame()
         self.underline.setFixedHeight(UNDERLINE_HEIGHT)
         self.underline.setFixedWidth(UNDERLINE_WIDTH)
         self.underline.setStyleSheet(f"background-color: {ACCENT_COLOR}; border: none;")
         underline_row = QHBoxLayout()
         underline_row.setContentsMargins(0, 0, 0, 0)
+        underline_row.addStretch()
         underline_row.addWidget(self.underline)
         underline_row.addStretch()
         card_layout.addLayout(underline_row)

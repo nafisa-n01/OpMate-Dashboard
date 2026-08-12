@@ -4,7 +4,9 @@ ui/widgets/cpu_widget.py
 CPU usage widget styled as a bordered pixel-art card.
 
 Features:
-    - Card-style container: rounded border, header with title + icon
+    - Card container matching the rest of the dashboard: borderless
+      (background + rounded corners only), soft drop shadow, icon +
+      title with underline accent
     - Large overall CPU percentage using pixel font
     - Padded, pill-shaped progress bar
     - Per-core breakdown as small boxes in a grid
@@ -12,24 +14,19 @@ Features:
     - Color-coded by load (sage green/muted blue/muted terracotta)
     - 4 pixel-art screw icons pinned to the card's corners
 
-Shortened design note:
-    Vertical padding/spacing and a few font sizes were trimmed down
-    from the original version so this card takes up less height,
-    leaving room to place a decorative animated GIF beside it
-    (added separately in main_window.py, outside this widget's border).
-
-Design (matches RAM usage card reference):
+Design (matches the rest of the dashboard's card style):
     ┌─────────────────────────────────────┐
-    │ CPU USAGE                            │
-    │           65.6%                      │
-    │  ┌─────────────────────────────────┐│
-    │  │▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░│ │
-    │  └─────────────────────────────────┘│
-    │  Core 0  Core 1  Core 2  Core 3      │
-    │  ┌──┐  ┌──┐  ┌──┐  ┌──┐              │
-    │  │45│  │12│  │89│  │22│              │
-    │  └──┘  └──┘  └──┘  └──┘              │
-    │  Cores: 8              3.45 GHz      │
+      [icon] CPU USAGE
+      ▔▔▔▔▔▔▔▔▔ (underline accent)
+                 65.6%
+       ┌─────────────────────────────────┐
+       │▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░│
+       └─────────────────────────────────┘
+       Core 0  Core 1  Core 2  Core 3
+       ┌──┐  ┌──┐  ┌──┐  ┌──┐
+       │45│  │12│  │89│  │22│
+       └──┘  └──┘  └──┘  └──┘
+       Cores: 8              3.45 GHz
     └─────────────────────────────────────┘
 """
 
@@ -45,9 +42,10 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QWidget,
     QFrame,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QFont, QPixmap, QColor
 
 from core.data_models import CPUMetrics
 from ui.widgets.base_widget import BaseWidget
@@ -57,10 +55,11 @@ from ui.styles.fonts import get_pixel_font_family
 logger = logging.getLogger(__name__)
 
 CORES_PER_ROW = 8
-CORE_BOX_SIZE = 52  # was 60 — trimmed for a shorter card
+CORE_BOX_SIZE = 52
 
-# Card color palette (matches the RAM usage reference image)
-CARD_BORDER_COLOR = "#6a6a9a"
+# Card color palette (shared visual language with the rest of the
+# dashboard). No CARD_BORDER_COLOR — this card is intentionally
+# borderless, matching RAM/Disk/Health.
 CARD_BACKGROUND_COLOR = "#3d3d5c"
 CARD_INNER_BACKGROUND = "#2a2a44"
 ACCENT_COLOR = "#D6A85F"  # Muted Amber, CPU's accent color
@@ -69,9 +68,19 @@ ACCENT_COLOR = "#D6A85F"  # Muted Amber, CPU's accent color
 SCREW_ICON_PATH = os.path.join("assets", "icons", "screw.png")
 SCREW_MARGIN = 4  # px from each edge of the card
 
-# Title icon
+# Title icon + text
 CPU_ICON_PATH = os.path.join("assets", "icons", "cpu_icon.png")
-TITLE_ICON_HEIGHT = 20  # was 22 — trimmed slightly
+TITLE_ICON_HEIGHT = 26  # matches RAM/Disk/Health's icon height
+TITLE_FONT_SIZE = 12  # matches RAM/Disk/Health's title size
+
+# Title underline accent (thin colored bar under the title text)
+UNDERLINE_HEIGHT = 2
+UNDERLINE_WIDTH = 90  # px — roughly matches "CPU USAGE" text width
+
+# Drop shadow (soft, subtle — matches the rest of the dashboard)
+SHADOW_BLUR_RADIUS = 24
+SHADOW_OFFSET_Y = 6
+SHADOW_COLOR = QColor(0, 0, 0, 160)  # semi-transparent black
 
 # Severity palette (shared meaning across all widgets):
 # safe = sage green, ok = muted blue, severe = muted terracotta
@@ -128,6 +137,8 @@ class CPUWidget(BaseWidget):
     Widget displaying real-time CPU usage metrics, styled as a pixel-art card.
 
     Attributes:
+        card (_CardFrame): The outer card frame. Borderless — only
+            background, rounded corners, and a drop shadow.
         overall_label (QLabel): Shows overall CPU % (large, pixel font)
         freq_label (QLabel): Shows CPU frequency (footer, right side)
         cores_label (QLabel): Shows core count (footer, left side)
@@ -150,28 +161,37 @@ class CPUWidget(BaseWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(outer_layout)
 
-        # --- CARD CONTAINER ---
+        # --- CARD CONTAINER (borderless — background + rounded corners only) ---
         screw_pixmap = QPixmap(SCREW_ICON_PATH)
-        card = _CardFrame(screw_pixmap)
-        card.setStyleSheet(
+        self.card = _CardFrame(screw_pixmap)
+        self.card.setStyleSheet(
             f"""
             QFrame {{
                 background-color: {CARD_BACKGROUND_COLOR};
-                border: 2px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 14px;
             }}
         """
         )
-        card_layout = QVBoxLayout()
-        card_layout.setContentsMargins(20, 12, 20, 12)  # was 20,16,20,16
-        card_layout.setSpacing(6)  # was 10
-        card.setLayout(card_layout)
 
-        outer_layout.addWidget(card)
+        # Soft drop shadow behind the card. Applied to the card itself
+        # (not the outer widget) so it reads as the card's own depth.
+        shadow = QGraphicsDropShadowEffect(self.card)
+        shadow.setBlurRadius(SHADOW_BLUR_RADIUS)
+        shadow.setOffset(0, SHADOW_OFFSET_Y)
+        shadow.setColor(SHADOW_COLOR)
+        self.card.setGraphicsEffect(shadow)
+
+        card_layout = QVBoxLayout()
+        card_layout.setContentsMargins(20, 14, 20, 14)
+        card_layout.setSpacing(8)
+        self.card.setLayout(card_layout)
+
+        outer_layout.addWidget(self.card)
 
         # --- TITLE ROW (icon + text) ---
         title_layout = QHBoxLayout()
-        title_layout.setSpacing(8)
+        title_layout.setSpacing(10)
 
         cpu_icon_pixmap = QPixmap(CPU_ICON_PATH)
         if not cpu_icon_pixmap.isNull():
@@ -187,7 +207,7 @@ class CPUWidget(BaseWidget):
             logger.warning("CPU icon not loaded from '%s'", CPU_ICON_PATH)
 
         title = QLabel("CPU USAGE")
-        title.setFont(QFont(self._pixel_font, 11))
+        title.setFont(QFont(self._pixel_font, TITLE_FONT_SIZE))
         title.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         title_layout.addWidget(title)
 
@@ -195,9 +215,20 @@ class CPUWidget(BaseWidget):
 
         card_layout.addLayout(title_layout)
 
+        # --- TITLE UNDERLINE ACCENT ---
+        underline = QFrame()
+        underline.setFixedHeight(UNDERLINE_HEIGHT)
+        underline.setFixedWidth(UNDERLINE_WIDTH)
+        underline.setStyleSheet(f"background-color: {ACCENT_COLOR}; border: none;")
+        underline_row = QHBoxLayout()
+        underline_row.setContentsMargins(0, 0, 0, 0)
+        underline_row.addWidget(underline)
+        underline_row.addStretch()
+        card_layout.addLayout(underline_row)
+
         # --- OVERALL PERCENTAGE (LARGE, CENTERED) ---
         self.overall_label = QLabel("0%")
-        self.overall_label.setFont(QFont(self._pixel_font, 18))  # was 22
+        self.overall_label.setFont(QFont(self._pixel_font, 18))
         self.overall_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.overall_label.setStyleSheet(f"color: {ACCENT_COLOR}; border: none;")
         card_layout.addWidget(self.overall_label)
@@ -207,37 +238,37 @@ class CPUWidget(BaseWidget):
         self.overall_bar.setMaximum(100)
         self.overall_bar.setValue(0)
         self.overall_bar.setTextVisible(False)
-        self.overall_bar.setFixedHeight(16)  # was 22
+        self.overall_bar.setFixedHeight(16)
         self._style_pill_bar(self.overall_bar, ACCENT_COLOR)
         card_layout.addWidget(self.overall_bar)
 
-        card_layout.addSpacing(4)  # was 6
+        card_layout.addSpacing(4)
 
         # --- PER-CORE GRID ---
         grid_container = QWidget()
         grid_container.setStyleSheet("border: none;")
         self.core_grid_layout = QGridLayout()
-        self.core_grid_layout.setSpacing(6)  # was 8
+        self.core_grid_layout.setSpacing(6)
         self.core_grid_layout.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         grid_container.setLayout(self.core_grid_layout)
         card_layout.addWidget(grid_container)
 
-        card_layout.addSpacing(4)  # was 6
+        card_layout.addSpacing(4)
 
         # --- FOOTER ROW: Cores | Frequency ---
         footer_layout = QHBoxLayout()
 
         self.cores_label = QLabel("Cores: --")
-        self.cores_label.setFont(QFont(self._pixel_font, 8))
+        self.cores_label.setFont(QFont(self._pixel_font, 7))
         self.cores_label.setStyleSheet("color: #aaaaaa; border: none;")
         footer_layout.addWidget(self.cores_label)
 
         footer_layout.addStretch()
 
         self.freq_label = QLabel("-- GHz")
-        self.freq_label.setFont(QFont(self._pixel_font, 8))
+        self.freq_label.setFont(QFont(self._pixel_font, 7))
         self.freq_label.setStyleSheet("color: #aaaaaa; border: none;")
         footer_layout.addWidget(self.freq_label)
 
@@ -259,7 +290,7 @@ class CPUWidget(BaseWidget):
             f"""
             QFrame {{
                 background-color: {CARD_INNER_BACKGROUND};
-                border: 1px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 8px;
             }}
         """
@@ -277,7 +308,7 @@ class CPUWidget(BaseWidget):
         box_layout.addWidget(core_label)
 
         percent_label = QLabel("0%")
-        percent_label.setFont(QFont(self._pixel_font, 8))  # was 9
+        percent_label.setFont(QFont(self._pixel_font, 8))
         percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         percent_label.setStyleSheet("border: none;")
         box_layout.addWidget(percent_label)
@@ -290,7 +321,7 @@ class CPUWidget(BaseWidget):
 
     def _style_pill_bar(self, bar: QProgressBar, color: str) -> None:
         """
-        Apply the padded, pill-shaped bar style seen in the reference image.
+        Apply the padded, pill-shaped bar style seen across the dashboard.
 
         Args:
             bar: Progress bar to style.
@@ -300,7 +331,7 @@ class CPUWidget(BaseWidget):
             f"""
             QProgressBar {{
                 background-color: {CARD_INNER_BACKGROUND};
-                border: 1px solid {CARD_BORDER_COLOR};
+                border: none;
                 border-radius: 8px;
             }}
             QProgressBar::chunk {{
