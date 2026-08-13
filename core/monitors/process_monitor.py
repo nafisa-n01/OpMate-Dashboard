@@ -5,7 +5,7 @@ Running processes monitoring using psutil.
 
 What we measure:
     1. All running processes on the system
-    2. For each: PID, name, memory (MB and %), status, owner
+    2. For each: PID, name, CPU %, memory (MB and %), status, owner
     3. Top 10 processes sorted by memory usage (highest first)
     4. Total process count (for system overview)
 
@@ -14,21 +14,41 @@ Why top 10?
     - Top 10 by memory shows where resources are actually going
     - User can see memory hogs at a glance
 
+CPU percent notes — IMPORTANT:
+    psutil's per-process cpu_percent() is stateful — it measures CPU
+    time consumed SINCE THE LAST CALL ON THAT SAME Process OBJECT.
+    Crucially, psutil.process_iter() creates a brand-new Process
+    object every time it's called. If we called cpu_percent() on
+    those throwaway objects, every poll would see a "first call" with
+    nothing to compare against, and CPU would read 0.0% forever —
+    not just on startup, but permanently.
+
+    The fix: ProcessMonitor keeps its own persistent cache of Process
+    objects, keyed by PID (self._process_cache). Each poll reuses the
+    SAME object for a given PID across calls, so cpu_percent() has a
+    real previous timestamp to diff against. A process's CPU % reads
+    0.0% only on the single poll where it's first discovered — every
+    poll after that returns a real value. Processes that exit are
+    removed from the cache to avoid leaking memory over a long-running
+    session.
+
 Challenges:
     - Processes die mid-iteration (handle gracefully)
     - Permission errors (can't read other users' processes without root)
     - Process status varies (running, sleeping, zombie, etc.)
+    - Some system processes return incomplete/None data even when
+      access technically succeeds (e.g. Windows "Memory Compression")
 """
 
 import logging
 from datetime import datetime
-from typing import List
+from typing import Dict, List
 
 import psutil
 
 from core.monitors.base_monitor import BaseMonitor
 from core.data_models import ProcessMetrics, ProcessInfo
-from core.exceptions import MonitorException, ProcessNotFoundError, PermissionDeniedError
+from core.exceptions import MonitorException
 
 
 logger = logging.getLogger(__name__)
@@ -42,12 +62,16 @@ class ProcessMonitor(BaseMonitor):
     Monitors running processes.
 
     Attributes:
-        None (all data fetched fresh each poll)
+        _process_cache (Dict[int, psutil.Process]): Persistent Process
+            objects keyed by PID, kept alive across polls so per-process
+            cpu_percent() has a real "last call" to measure against
+            instead of resetting to 0.0% every poll.
     """
 
     def __init__(self) -> None:
         """Initialize process monitor."""
         super().__init__()
+        self._process_cache: Dict[int, psutil.Process] = {}
         logger.debug("ProcessMonitor initialized")
 
     def get_data(self) -> ProcessMetrics:
@@ -55,14 +79,15 @@ class ProcessMonitor(BaseMonitor):
         Fetch current running processes metrics.
 
         Process:
-            1. Iterate through all running processes via psutil.process_iter()
-            2. For each process, safely extract: PID, name, memory, status, username
-            3. Handle errors (process dies, permission denied) gracefully
-            4. Collect into ProcessInfo list
-            5. Sort by memory usage (highest first)
-            6. Take top 10
-            7. Count total processes
-            8. Return ProcessMetrics with timestamp
+            1. Get the current set of running PIDs
+            2. For each PID, reuse a cached Process object if we've
+               seen it before (so cpu_percent() has history to diff
+               against), or create + cache a new one if it's new
+            3. Prime/measure CPU %, extract memory/status/etc.
+            4. Handle errors (process dies, permission denied) gracefully
+            5. Prune cache entries for PIDs that no longer exist
+            6. Sort by memory usage, take top 10
+            7. Return ProcessMetrics with timestamp
 
         Returns:
             ProcessMetrics: Top 10 processes by memory + total process count.
@@ -73,47 +98,63 @@ class ProcessMonitor(BaseMonitor):
         try:
             processes: List[ProcessInfo] = []
             total_processes = 0
+            seen_pids = set()
 
-            # Iterate all running processes
-            # attrs parameter makes psutil fetch these attributes efficiently
-            # (more efficient than calling process.name(), process.memory_info(), etc. separately)
-            for proc in psutil.process_iter(
-                attrs=["pid", "name", "memory_percent", "status", "username"]
-            ):
+            for pid in psutil.pids():
+                seen_pids.add(pid)
+
+                # Reuse the cached Process object for this PID if we
+                # have one — this is what makes cpu_percent() actually
+                # work across polls. Only create a fresh one the first
+                # time we see this PID.
+                proc = self._process_cache.get(pid)
+                if proc is None:
+                    try:
+                        proc = psutil.Process(pid)
+                        self._process_cache[pid] = proc
+                        # Priming call: on a genuinely new Process
+                        # object this always returns 0.0. That's
+                        # expected and only happens once, on the poll
+                        # where this process is first discovered.
+                        proc.cpu_percent(interval=None)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+
                 total_processes += 1
 
                 try:
-                    # Get the process info dict
-                    # This is safe to access (already fetched via attrs parameter)
-                    info = proc.info
+                    # Real CPU delta since this object's last call
+                    # (either the priming call above on a new process,
+                    # or last poll's call on an existing one).
+                    cpu_percent = proc.cpu_percent(interval=None)
 
-                    # Extract fields, defending against None values
-                    # (some Windows system processes like "Memory Compression"
-                    # or "Registry" return incomplete data even when access succeeds)
-                    pid = info.get("pid")
-                    name = info.get("name") or "Unknown"
-                    memory_percent = info.get("memory_percent") or 0.0
-                    status = info.get("status") or "unknown"
-                    username = info.get("username") or "N/A"
+                    name = proc.name() or "Unknown"
 
-                    # Skip this process entirely if we don't even have a valid PID
-                    # (this should be rare, but protects against malformed data)
-                    if pid is None:
-                        logger.debug("Skipping process with missing PID: %s", name)
-                        total_processes -= 1
-                        continue
-
-                    # Convert memory percent to MB
-                    # We need to get absolute memory usage
                     try:
-                        memory_mb = proc.memory_info().rss / (1024 * 1024)
+                        memory_info = proc.memory_info()
+                        memory_mb = memory_info.rss / (1024 * 1024)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         memory_mb = 0.0
 
-                    # Create ProcessInfo for this process
+                    try:
+                        memory_percent = proc.memory_percent() or 0.0
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        memory_percent = 0.0
+
+                    try:
+                        status = proc.status() or "unknown"
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        status = "unknown"
+
+                    try:
+                        username = proc.username() or "N/A"
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        username = "N/A"
+
                     process_info = ProcessInfo(
                         pid=pid,
                         name=name,
+                        cpu_percent=cpu_percent,
                         memory_mb=memory_mb,
                         memory_percent=memory_percent,
                         status=status,
@@ -123,27 +164,28 @@ class ProcessMonitor(BaseMonitor):
                     processes.append(process_info)
 
                 except (psutil.NoSuchProcess, psutil.ZombieProcess):
-                    # Process died between iteration and data fetch
-                    # This is normal; just skip it
-                    logger.debug("Process %s exited during iteration", info.get("pid", "?"))
-                    total_processes -= 1  # Don't count processes that died
+                    # Process died between discovery and data fetch —
+                    # normal, just skip it.
+                    logger.debug("Process %s exited during iteration", pid)
+                    total_processes -= 1
                     continue
 
                 except psutil.AccessDenied:
-                    # Can't read this process (e.g., privileged system process on Linux)
-                    # Log and skip; other processes will still be collected
-                    logger.debug(
-                        "Access denied to process %s",
-                        info.get("pid", "?"),
-                    )
-                    total_processes -= 1  # Don't count inaccessible processes
+                    logger.debug("Access denied to process %s", pid)
+                    total_processes -= 1
                     continue
 
                 except Exception as e:
-                    # Unexpected error; log but continue
-                    logger.warning("Error processing process: %s", e)
+                    logger.warning("Error processing process %s: %s", pid, e)
                     total_processes -= 1
                     continue
+
+            # Prune cache entries for processes that no longer exist,
+            # so long-running sessions don't accumulate stale objects
+            # for every process that has ever existed.
+            stale_pids = set(self._process_cache.keys()) - seen_pids
+            for stale_pid in stale_pids:
+                del self._process_cache[stale_pid]
 
             # Sort by memory usage (highest first)
             processes.sort(key=lambda p: p.memory_percent, reverse=True)
@@ -151,7 +193,6 @@ class ProcessMonitor(BaseMonitor):
             # Take top 10
             top_processes = processes[:TOP_PROCESSES_LIMIT]
 
-            # Create and return the metric snapshot
             metrics = ProcessMetrics(
                 processes=top_processes,
                 total_processes=total_processes,
@@ -159,10 +200,11 @@ class ProcessMonitor(BaseMonitor):
             )
 
             logger.debug(
-                "Process metrics: %d total processes, top hog: %s (%.1f MB)",
+                "Process metrics: %d total processes, top hog: %s (%.1f MB, %.1f%% CPU)",
                 total_processes,
                 top_processes[0].name if top_processes else "N/A",
                 top_processes[0].memory_mb if top_processes else 0,
+                top_processes[0].cpu_percent if top_processes else 0,
             )
 
             return metrics

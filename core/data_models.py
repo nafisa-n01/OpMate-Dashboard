@@ -108,6 +108,8 @@ class ProcessInfo:
     Attributes:
         pid (int): Process ID.
         name (str): Process executable name (e.g., "chrome.exe", "python").
+        cpu_percent (float): CPU usage as a percentage (0-100+, can exceed
+            100 on multi-core systems if a process uses more than one core).
         memory_mb (float): Memory used in megabytes.
         memory_percent (float): Memory as percentage of total RAM.
         status (str): Process state ("running", "sleeping", "zombie", etc.).
@@ -116,6 +118,7 @@ class ProcessInfo:
 
     pid: int
     name: str
+    cpu_percent: float
     memory_mb: float
     memory_percent: float
     status: str

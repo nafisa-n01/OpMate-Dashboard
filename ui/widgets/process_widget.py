@@ -4,22 +4,22 @@ ui/widgets/process_widget.py
 Running processes widget showing top 10 by memory usage in a table.
 
 Features:
-    - Sortable-looking table: PID, Name, User, Memory, Status
+    - Sortable table: PID, Name, User, CPU, Memory, Status
     - Color-coded status text
     - Total process count shown below table
     - Updates every 2 seconds
 
 Design:
-    ┌──────────────────────────────────────────────┐
-    │ RUNNING PROCESSES (Top 10 by Memory)          │
-    ├──────────────────────────────────────────────┤
-    │ PID   Name          User    Memory    Status │
-    │ 1234  chrome.exe    Admin   520 MB    running│
-    │ 5678  firefox.exe   Admin   892 MB    running│
-    │ ...                                            │
-    ├──────────────────────────────────────────────┤
-    │ Total processes: 187                          │
-    └──────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────┐
+    │ ⚙️ RUNNING PROCESSES (Top 10 by Memory)                │
+    ├──────────────────────────────────────────────────────┤
+    │ PID   Name          User    CPU    Memory    Status  │
+    │ 1234  chrome.exe    Admin   12.4%  520 MB    running │
+    │ 5678  firefox.exe   Admin   3.1%   892 MB    running │
+    │ ...                                                    │
+    ├──────────────────────────────────────────────────────┤
+    │ Total processes: 187                                  │
+    └──────────────────────────────────────────────────────┘
 """
 
 import logging
@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QPixmap
 
 from core.data_models import ProcessMetrics
 from ui.widgets.base_widget import BaseWidget
@@ -46,8 +46,9 @@ logger = logging.getLogger(__name__)
 COL_PID = 0
 COL_NAME = 1
 COL_USER = 2
-COL_MEMORY = 3
-COL_STATUS = 4
+COL_CPU = 3
+COL_MEMORY = 4
+COL_STATUS = 5
 
 
 class ProcessWidget(BaseWidget):
@@ -73,20 +74,6 @@ class ProcessWidget(BaseWidget):
         # --- TITLE ---
         title_layout = QHBoxLayout()
 
-        # TODO: Uncomment when you create process_icon.png
-        # try:
-        #     icon_pixmap = QPixmap("assets/icons/process_icon.png")
-        #     if not icon_pixmap.isNull():
-        #         icon_label = QLabel()
-        #         icon_label.setPixmap(
-        #             icon_pixmap.scaledToHeight(
-        #                 32, Qt.TransformationMode.SmoothTransformation
-        #             )
-        #         )
-        #         title_layout.addWidget(icon_label)
-        # except Exception as e:
-        #     logger.warning("Could not load process icon: %s", e)
-
         title = QLabel("RUNNING PROCESSES (Top 10 by Memory)")
         title_font = QFont()
         title_font.setPointSize(14)
@@ -100,19 +87,15 @@ class ProcessWidget(BaseWidget):
 
         # --- TABLE ---
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
+        self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(
-            ["PID", "Process Name", "User", "Memory", "Status"]
+            ["PID", "Process Name", "User", "CPU", "Memory", "Status"]
         )
         self.table.setRowCount(10)  # Fixed 10 rows (top 10 processes)
 
         # Table behavior settings
-        self.table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )  # Read-only
-        self.table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # Read-only
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)  # Hide row numbers (we have PID)
         self.table.setAlternatingRowColors(True)
 
@@ -121,6 +104,7 @@ class ProcessWidget(BaseWidget):
         header.setSectionResizeMode(COL_PID, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(COL_USER, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COL_CPU, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_MEMORY, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeMode.ResizeToContents)
 
@@ -222,6 +206,11 @@ class ProcessWidget(BaseWidget):
         user_item = QTableWidgetItem(proc.username or "N/A")
         self.table.setItem(row, COL_USER, user_item)
 
+        # CPU column: "12.4%"
+        cpu_item = QTableWidgetItem(f"{proc.cpu_percent:.1f}%")
+        cpu_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setItem(row, COL_CPU, cpu_item)
+
         # Memory column: "520.3 MB (3.2%)"
         memory_item = QTableWidgetItem(
             f"{proc.memory_mb:.1f} MB ({proc.memory_percent:.1f}%)"
@@ -242,7 +231,7 @@ class ProcessWidget(BaseWidget):
         Args:
             row: Row index to clear.
         """
-        for col in range(5):
+        for col in range(6):
             self.table.setItem(row, col, QTableWidgetItem(""))
 
     def _status_color(self, status: str) -> QColor:
