@@ -4,7 +4,9 @@ ui/widgets/storage_widget.py
 Storage Analyzer widget: pick a disk, see its top space-consuming
 folders bucketed into 4 tiers, and drill down through subfolders.
 A companion GIF reacts to whatever disk or folder the user is
-currently hovering, giving an at-a-glance read on severity.
+currently hovering, giving an at-a-glance read on severity. A Cleanup
+Advisor panel sits beside the companion, offering a separate, safer
+one-click way to reclaim space from known cache/temp categories.
 
 Design:
     ┌───────────────────────────────────────────────────┐
@@ -21,7 +23,7 @@ Design:
       │ Downloads  [██░░░░░░░░]   1.1 GB  22%  Watch    │
       │ ...                                              │
       └─────────────────────────────────────────────────┘
-                [ companion GIF ]
+        [ companion GIF ]     [ Cleanup Advisor panel ]
     └───────────────────────────────────────────────────┘
 
 Navigation:
@@ -41,6 +43,15 @@ Companion animation:
     stay crisp (not blurry), this should be an exact integer multiple
     of the GIF's native resolution — e.g. a 80x80 source GIF should
     display at 160 (2x), 240 (3x), or 320 (4x), not an arbitrary size.
+
+Cleanup Advisor:
+    A separate, self-contained CleanupPanel (see
+    ui/widgets/cleanup_panel.py) that scans known cache/temp
+    categories (Temp Files, Recycle Bin, Browser Cache, etc.) and lets
+    the user select and delete them, with an explicit confirmation
+    dialog before anything is removed. Entirely independent of the
+    folder-browsing flow above — it targets a small, fixed set of
+    known-safe categories rather than arbitrary user folders.
 
 Row layout:
     Bars are intentionally short and fixed-width (BAR_WIDTH) rather
@@ -82,6 +93,7 @@ from PyQt6.QtGui import QFont, QMovie, QColor
 from core.storage.models import DirectoryNode
 from core.storage_worker_thread import StorageScanThread
 from ui.widgets.base_widget import BaseWidget
+from ui.widgets.cleanup_panel import CleanupPanel
 from ui.styles.fonts import get_pixel_font_family
 
 
@@ -140,11 +152,13 @@ ROW_CONTENT_MARGINS = (14, 9, 18, 9)  # left, top, right, bottom
 GIF_DIR = os.path.join("assets", "gifs")
 TIER_GIF_FILENAMES = ("tier00.gif", "tier01.gif", "tier02.gif", "tier03.gif")
 IDLE_GIF_FILENAME = "notier.gif"
-# Was 180x180 — bumped up for more visual presence. For crisp pixel
-# art, this should be an exact integer multiple of the GIF's actual
-# source resolution (e.g. 80px source -> 160/240/320 target). Adjust
-# once the source size is confirmed.
+# For crisp pixel art, this should be an exact integer multiple of the
+# GIF's actual source resolution (e.g. 80px source -> 160/240/320).
 COMPANION_SIZE = QSize(240, 240)
+
+# Horizontal gap between the companion GIF and the Cleanup Advisor
+# panel beside it.
+COMPANION_ROW_SPACING = 20
 
 BUTTON_STYLE = f"""
     QPushButton {{
@@ -166,7 +180,8 @@ BUTTON_STYLE = f"""
 class StorageWidget(BaseWidget):
     """
     Widget for browsing folder sizes with a disk picker entry point,
-    4-tier severity classification, and drill-down navigation.
+    4-tier severity classification, drill-down navigation, and a
+    Cleanup Advisor panel for safe cache/temp cleanup.
 
     Attributes:
         card (QFrame): The outer card frame. Borderless — only
@@ -182,6 +197,8 @@ class StorageWidget(BaseWidget):
             scan thread, if any. Kept referenced so Qt doesn't garbage
             collect it mid-scan, and to avoid starting a second scan
             while one is already running.
+        cleanup_panel (CleanupPanel): Self-contained cleanup checklist
+            widget, placed beside the companion GIF.
     """
 
     def __init__(self) -> None:
@@ -203,7 +220,7 @@ class StorageWidget(BaseWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        """Build the card-style UI layout: title, stacked views, companion."""
+        """Build the card-style UI layout: title, stacked views, companion row."""
         outer_layout = QVBoxLayout()
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(outer_layout)
@@ -265,11 +282,11 @@ class StorageWidget(BaseWidget):
         self.stack.addWidget(self._build_folder_list_page())
         card_layout.addWidget(self.stack)
 
-        # --- COMPANION GIF ---
+        # --- COMPANION ROW: companion GIF + Cleanup Advisor panel ---
         # No border/frame of its own — it shares the card's background
         # directly so there's no visible seam between the list above
-        # and the companion below, just generous top spacing.
-        card_layout.addWidget(self._build_companion_area())
+        # and this row, just generous top spacing.
+        card_layout.addWidget(self._build_companion_row())
 
     def _build_disk_picker_page(self) -> QWidget:
         """Build the disk-picker view (shown on load / via "Disks" button)."""
@@ -376,15 +393,21 @@ class StorageWidget(BaseWidget):
 
         return page
 
-    def _build_companion_area(self) -> QWidget:
-        """Build the centered companion GIF area at the bottom of the card."""
+    def _build_companion_row(self) -> QWidget:
+        """
+        Build the bottom row: companion GIF on the left, Cleanup
+        Advisor panel on the right, sharing the card's background.
+        """
         wrapper = QWidget()
         wrapper.setStyleSheet("background-color: transparent;")
         wrapper_layout = QHBoxLayout()
-        # Generous top margin so the companion clearly reads as its
-        # own relaxed zone rather than butting against the list above.
+        # Generous top margin so this row clearly reads as its own
+        # relaxed zone rather than butting against the list above.
         wrapper_layout.setContentsMargins(0, 18, 0, 4)
+        wrapper_layout.setSpacing(COMPANION_ROW_SPACING)
         wrapper.setLayout(wrapper_layout)
+
+        wrapper_layout.addStretch(1)
 
         self.companion_label = QLabel()
         self.companion_label.setFixedSize(COMPANION_SIZE)
@@ -395,9 +418,11 @@ class StorageWidget(BaseWidget):
             f"background-color: {CARD_BACKGROUND_COLOR}; border: none;"
         )
         self.companion_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        wrapper_layout.addStretch(1)
         wrapper_layout.addWidget(self.companion_label)
+
+        self.cleanup_panel = CleanupPanel()
+        wrapper_layout.addWidget(self.cleanup_panel)
+
         wrapper_layout.addStretch(1)
 
         return wrapper
