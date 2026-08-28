@@ -1,7 +1,7 @@
 """
 main.py
 --------
-Entry point for the SystemWatch application.
+Entry point for the OpMate application.
 
 Responsibilities:
     - Configure application-wide logging
@@ -13,9 +13,6 @@ Responsibilities:
 import sys
 import logging
 
-# Pylint cannot properly inspect some PyQt6 modules
-# even though the imports work correctly.
-# pylint: disable=no-name-in-module
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
@@ -53,10 +50,10 @@ def main() -> int:
     """
     setup_logging()
     logger = logging.getLogger(__name__)
-    logger.info("Starting SystemWatch...")
+    logger.info("Starting SOpMate...")
 
     app = QApplication(sys.argv)
-    app.setApplicationName("SystemWatch")
+    app.setApplicationName("OpMate")
 
     # Window/taskbar icon — see asset instructions below
     app.setWindowIcon(QIcon("assets/icons/app_icon.png"))
@@ -67,7 +64,7 @@ def main() -> int:
     logger.info("Main window displayed. Entering event loop.")
     exit_code = app.exec()
 
-    logger.info("SystemWatch closed with exit code %s", exit_code)
+    logger.info("OpMate closed with exit code %s", exit_code)
     return exit_code
 
 
