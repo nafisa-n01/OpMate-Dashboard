@@ -131,11 +131,6 @@ ARCHITECTURE HIGHLIGHTS
   error handling, and always requires explicit user confirmation
   before running.
 
-For a full technical writeup, including system architecture diagrams
-and a discussion of the main engineering challenge (blocking
-filesystem calls freezing the UI, and how background threading +
-per-file fault isolation solved it), see the accompanying technical
-report.
 
 
 NOTES
